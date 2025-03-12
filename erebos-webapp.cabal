@@ -1,0 +1,27 @@
+cabal-version:      3.0
+name:               erebos-webapp
+version:            0.1.0.0
+-- synopsis:
+-- description:
+homepage:           https://erebosprotocol.net
+license:            GPL-3.0-only
+license-file:       LICENSE
+author:             Roman Smrž
+maintainer:         roman.smrz@seznam.cz
+-- copyright:
+category:           Web
+build-type:         Simple
+extra-doc-files:    CHANGELOG.md
+-- extra-source-files:
+
+common warnings
+    ghc-options: -Wall
+
+executable erebos-webapp
+    import:           warnings
+    main-is:          Main.hs
+    -- other-modules:
+    -- other-extensions:
+    build-depends:    base ^>=4.17.2.1
+    hs-source-dirs:   src
+    default-language: GHC2021
