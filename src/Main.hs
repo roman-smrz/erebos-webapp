@@ -2,6 +2,7 @@ module Main (main, setup) where
 
 import Control.Monad.Reader
 
+import Data.ByteString qualified as B
 import Data.Maybe
 import Data.Proxy
 import Data.Text qualified as T
@@ -14,6 +15,9 @@ import Erebos.Storable
 import Erebos.Storage
 
 import System.IO.Unsafe
+
+import JavaScript qualified as JS
+import WebSocket
 
 main :: IO ()
 main = error "unused"
@@ -39,9 +43,9 @@ setup = do
         js_set_textContent nameElem $ toJSString $ T.unpack $ displayIdentity $ headLocalIdentity ls
 
     buttonElem <- js_document_getElementById (toJSString "some_button")
-    buttonCallback <- asEventListener onButtonClick
+    buttonCallback <- JS.asEventListener onButtonClick
 
-    js_addEventListener buttonElem (toJSString "click") buttonCallback
+    JS.addEventListener buttonElem (toJSString "click") buttonCallback
 
     let name = T.pack "My Name"
         devName = T.pack "WebApp"
@@ -66,6 +70,10 @@ setup = do
                 , lsShared = [ shared ]
                 , lsOther = []
                 }
+
+    startClient "localhost" 9160 "" $ \conn -> do
+        sendMessage conn $ B.pack [ 98 .. 107 ]
+
     return ()
 
 
@@ -100,8 +108,3 @@ foreign import javascript unsafe "document.createTextNode($1)"
 foreign import javascript unsafe "$1.value"
     js_get_value :: JSVal -> IO JSString
 
-foreign import javascript unsafe "$1.addEventListener($2, $3)"
-    js_addEventListener :: JSVal -> JSString -> JSVal -> IO ()
-
-foreign import javascript "wrapper"
-    asEventListener :: (JSVal -> IO ()) -> IO JSVal

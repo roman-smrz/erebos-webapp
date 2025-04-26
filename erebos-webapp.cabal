@@ -19,15 +19,18 @@ common warnings
 
 executable erebos-webapp
     import:           warnings
-    main-is:          Main.hs
     ghc-options:
         -no-hs-main
         -optl-mexec-model=reactor
         -optl-Wl,--export=hs_init,--export=setup
+        -fdefer-typed-holes
 
     extra-libraries: blake2b-ref
 
-    -- other-modules:
+    main-is:          Main.hs
+    other-modules:
+        JavaScript
+        WebSocket
 
     default-extensions:
         DefaultSignatures
@@ -52,6 +55,7 @@ executable erebos-webapp
     -- other-extensions:
     build-depends:
         base ^>= { 4.21 },
+        bytestring ^>= { 0.12 },
         erebos ^>= { 0.1.8 },
         ghc-experimental ^>= { 9.1201 },
         mtl ^>= { 2.3 },
