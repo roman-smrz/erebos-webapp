@@ -1,18 +1,25 @@
 module Main (main, setup) where
 
+import Control.Concurrent
+import Control.Monad
 import Control.Monad.Reader
 
-import Data.ByteString qualified as B
 import Data.Maybe
 import Data.Proxy
 import Data.Text qualified as T
 
 import GHC.Wasm.Prim
 
+import Erebos.Chatroom
+import Erebos.DirectMessage
+import Erebos.Discovery
 import Erebos.Identity
+import Erebos.Network
+import Erebos.Service
 import Erebos.State
 import Erebos.Storable
 import Erebos.Storage
+import Erebos.Sync
 
 import System.IO.Unsafe
 
@@ -71,8 +78,18 @@ setup = do
                 , lsOther = []
                 }
 
+    server <- startServer defaultServerOptions globalHead JS.consoleLog
+        [ someService @ChatroomService Proxy
+        , someService @DiscoveryService Proxy
+        , someService @DirectMessage Proxy
+        , someService @SyncService Proxy
+        ]
+
     startClient "localhost" 9160 "" $ \conn -> do
-        sendMessage conn $ B.pack [ 98 .. 107 ]
+        void $ serverPeerCustom server conn
+        void $ forkIO $ forever $ do
+            msg <- receiveMessage conn
+            receivedFromCustomAddress server conn msg
 
     return ()
 

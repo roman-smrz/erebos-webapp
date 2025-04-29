@@ -9,7 +9,11 @@ import Control.Concurrent.Chan
 
 import Data.ByteString (ByteString)
 import Data.ByteString.Unsafe
+import Data.Function
+import Data.Unique
 import Data.Word
+
+import Erebos.Network
 
 import Foreign.Marshal.Alloc
 import Foreign.Ptr
@@ -20,13 +24,29 @@ import JavaScript qualified as JS
 
 
 data Connection = Connection
-    { connJS :: JSVal
+    { connUnique :: Unique
+    , connAddress :: String
+    , connJS :: JSVal
     , connInQueue :: Chan ByteString
     }
 
+instance Eq Connection where
+    (==) = (==) `on` connUnique
+
+instance Ord Connection where
+    compare = compare `on` connUnique
+
+instance Show Connection where
+    show = connAddress
+
+instance PeerAddressType Connection where
+    sendBytesToAddress = sendMessage
+
 startClient :: String -> Int -> String -> (Connection -> IO ()) -> IO ()
 startClient addr port path fun = do
-    connJS <- js_initWebSocket (toJSString $ "ws://" <> addr <> ":" <> show port <> "/" <> path)
+    connUnique <- newUnique
+    let connAddress = "ws://" <> addr <> ":" <> show port <> "/" <> path
+    connJS <- js_initWebSocket (toJSString connAddress)
     connInQueue <- newChan
     let conn = Connection {..}
 
