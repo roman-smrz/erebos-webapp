@@ -50,10 +50,10 @@ startClient addr port path fun = do
     connInQueue <- newChan
     let conn = Connection {..}
 
-    onOpen <- JS.asEventListener $ \_ -> do
+    JS.addEventListener connJS "open" $ \_ -> do
         fun conn
 
-    onMessage <- JS.asEventListener $ \ev -> do
+    JS.addEventListener connJS "message" $ \ev -> do
         bytes <- js_get_data ev
         len <- js_get_byteLength bytes
         ptr <- mallocBytes len
@@ -61,8 +61,6 @@ startClient addr port path fun = do
         bs <- unsafePackCStringFinalizer ptr len (free ptr)
         writeChan connInQueue bs
 
-    JS.addEventListener connJS (toJSString "open") onOpen
-    JS.addEventListener connJS (toJSString "message") onMessage
 
 sendMessage :: Connection -> ByteString -> IO ()
 sendMessage Connection {..} bs = do

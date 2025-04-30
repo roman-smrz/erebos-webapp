@@ -60,6 +60,7 @@ executable erebos-webapp
         ghc-experimental ^>= { 9.1201 },
         mtl ^>= { 2.3 },
         text ^>= { 2.1 },
+        time ^>= { 1.14 },
 
     hs-source-dirs:   src
     default-language: GHC2021

@@ -2,11 +2,13 @@ module Main (main, setup) where
 
 import Control.Concurrent
 import Control.Monad
+import Control.Monad.Except
 import Control.Monad.Reader
 
 import Data.Maybe
 import Data.Proxy
 import Data.Text qualified as T
+import Data.Time.LocalTime
 
 import GHC.Wasm.Prim
 
@@ -52,20 +54,16 @@ setup = do
         H.div $ do
             "Name: "
             H.span ! A.id "name_text" $ return ()
-            H.hr
-            H.input ! A.id "some_input" ! A.type_ "text" ! A.value "xyz"
-            H.button ! A.id "some_button" $ "add"
+        H.hr
         H.div $ do
-            H.ul ! A.id "some_list" $ return ()
+            H.ul ! A.id "msg_list" $ return ()
+        H.div $ do
+            H.input ! A.id "msg_text" ! A.type_ "text"
+            H.button ! A.id "msg_send" $ "send"
 
     nameElem <- js_document_getElementById (toJSString "name_text")
     _ <- watchHead globalHead $ \ls -> do
         js_set_textContent nameElem $ toJSString $ T.unpack $ displayIdentity $ headLocalIdentity ls
-
-    buttonElem <- js_document_getElementById (toJSString "some_button")
-    buttonCallback <- JS.asEventListener onButtonClick
-
-    JS.addEventListener buttonElem (toJSString "click") buttonCallback
 
     let name = T.pack "My Name"
         devName = T.pack "WebApp"
@@ -91,6 +89,18 @@ setup = do
                 , lsOther = []
                 }
 
+    messagesList <- JS.getElementById "msg_list"
+    tzone <- getCurrentTimeZone
+    void $ watchReceivedMessages globalHead $ \msg -> do
+        JS.consoleLog $ formatDirectMessage tzone $ fromStored msg
+        li <- js_document_createElement (toJSString "li")
+        content <- js_document_createTextNode $ toJSString $ formatDirectMessage tzone $ fromStored msg
+        js_appendChild li content
+        js_appendChild messagesList li
+
+    sendText <- JS.getElementById "msg_text"
+    sendButton <- JS.getElementById "msg_send"
+
     server <- startServer defaultServerOptions globalHead JS.consoleLog
         [ someService @ChatroomService Proxy
         , someService @DiscoveryService Proxy
@@ -99,23 +109,23 @@ setup = do
         ]
 
     startClient "localhost" 9160 "" $ \conn -> do
-        void $ serverPeerCustom server conn
         void $ forkIO $ forever $ do
             msg <- receiveMessage conn
             receivedFromCustomAddress server conn msg
 
-    return ()
+        peer <- serverPeerCustom server conn
+        JS.addEventListener sendButton "click" $ \_ -> do
+            peerIdentity peer >>= \case
+                PeerIdentityUnknown {} -> JS.consoleLog "unknown peer identity"
+                PeerIdentityRef {} -> JS.consoleLog "unresolved peer identity"
+                PeerIdentityFull pid -> do
+                    msg <- T.pack . fromJSString <$> js_get_value sendText
+                    js_set_value sendText $ toJSString ""
+                    res <- runExceptT $ flip runReaderT globalHead $ sendDirectMessage pid msg
+                    case res of
+                        Right sent -> JS.consoleLog . ("sent message: " <>) $ formatDirectMessage tzone $ fromStored sent
+                        Left err -> JS.consoleLog $ "Failed to send message: " <> err
 
-
-onButtonClick :: JSVal -> IO ()
-onButtonClick _event = do
-    inputElem <- js_document_getElementById (toJSString "some_input")
-    listElem <- js_document_getElementById (toJSString "some_list")
-
-    li <- js_document_createElement (toJSString "li")
-    content <- js_document_createTextNode =<< js_get_value inputElem
-    js_appendChild li content
-    js_appendChild listElem li
 
 foreign import javascript unsafe "document.getElementById($1)"
     js_document_getElementById :: JSString -> IO JSVal
@@ -138,3 +148,5 @@ foreign import javascript unsafe "document.createTextNode($1)"
 foreign import javascript unsafe "$1.value"
     js_get_value :: JSVal -> IO JSString
 
+foreign import javascript unsafe "$1.value = $2"
+    js_set_value :: JSVal -> JSString -> IO ()
