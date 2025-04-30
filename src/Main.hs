@@ -23,6 +23,11 @@ import Erebos.Sync
 
 import System.IO.Unsafe
 
+import Text.Blaze.Html5 ((!))
+import Text.Blaze.Html5 qualified as H
+import Text.Blaze.Html5.Attributes qualified as A
+import Text.Blaze.Html.Renderer.String
+
 import JavaScript qualified as JS
 import WebSocket
 
@@ -43,7 +48,15 @@ foreign export javascript setup :: IO ()
 setup :: IO ()
 setup = do
     body <- js_document_getElementById (toJSString "body")
-    js_set_innerHTML body (toJSString "<div>Name: <span id=\"name_text\"></span></div><hr><input id=\"some_input\" type=\"text\" value=\"xyz\" /><button id=\"some_button\">add</button></div><div><ul id=\"some_list\"></ul></div>")
+    js_set_innerHTML body $ toJSString $ renderHtml $ do
+        H.div $ do
+            "Name: "
+            H.span ! A.id "name_text" $ return ()
+            H.hr
+            H.input ! A.id "some_input" ! A.type_ "text" ! A.value "xyz"
+            H.button ! A.id "some_button" $ "add"
+        H.div $ do
+            H.ul ! A.id "some_list" $ return ()
 
     nameElem <- js_document_getElementById (toJSString "name_text")
     _ <- watchHead globalHead $ \ls -> do

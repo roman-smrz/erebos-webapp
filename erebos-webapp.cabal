@@ -40,6 +40,7 @@ executable erebos-webapp
         ImportQualifiedPost
         LambdaCase
         MultiWayIf
+        OverloadedStrings
         RankNTypes
         RecordWildCards
         ScopedTypeVariables
@@ -53,6 +54,7 @@ executable erebos-webapp
     -- other-extensions:
     build-depends:
         base ^>= { 4.21 },
+        blaze-html ^>= { 0.9 },
         bytestring ^>= { 0.12 },
         erebos ^>= { 0.1.8 },
         ghc-experimental ^>= { 9.1201 },
