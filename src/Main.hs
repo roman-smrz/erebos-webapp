@@ -5,8 +5,9 @@ import Control.Monad
 import Control.Monad.Except
 import Control.Monad.Reader
 
-import Data.Maybe
+import Data.Foldable
 import Data.Proxy
+import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time.LocalTime
 
@@ -17,6 +18,7 @@ import Erebos.DirectMessage
 import Erebos.Discovery
 import Erebos.Identity
 import Erebos.Network
+import Erebos.PubKey
 import Erebos.Service
 import Erebos.State
 import Erebos.Storable
@@ -43,7 +45,7 @@ globalStorage = unsafePerformIO $ memoryStorage
 {-# NOINLINE globalHead #-}
 globalHead :: Head LocalState
 globalHead = unsafePerformIO $ do
-    identity <- createIdentity globalStorage (Just $ T.pack "<init>") Nothing
+    identity <- createIdentity globalStorage Nothing Nothing
     storeHead globalStorage $ LocalState { lsPrev = Nothing, lsIdentity = idExtData identity, lsShared = [], lsOther = [] }
 
 foreign export javascript setup :: IO ()
@@ -54,6 +56,9 @@ setup = do
         H.div $ do
             "Name: "
             H.span ! A.id "name_text" $ return ()
+        H.div $ do
+            H.input ! A.id "name_set_input" ! A.type_ "text"
+            H.button ! A.id "name_set_button" $ "set name"
         H.hr
         H.div $ do
             H.ul ! A.id "msg_list" $ return ()
@@ -63,22 +68,17 @@ setup = do
 
     nameElem <- js_document_getElementById (toJSString "name_text")
     _ <- watchHead globalHead $ \ls -> do
-        js_set_textContent nameElem $ toJSString $ T.unpack $ displayIdentity $ headLocalIdentity ls
+        js_set_textContent nameElem $ toJSString $ maybe "(Anonymous)" T.unpack $ idName $ finalOwner $ headLocalIdentity ls
 
-    let name = T.pack "My Name"
-        devName = T.pack "WebApp"
-
+    let devName = T.pack "WebApp"
     let st = globalStorage
-    owner <- if
-        | T.null name -> return Nothing
-        | otherwise -> Just <$> createIdentity st (Just name) Nothing
-
-    identity <- createIdentity st (if T.null devName then Nothing else Just devName) owner
+    owner <- createIdentity st Nothing Nothing
+    identity <- createIdentity st (Just devName) (Just owner)
 
     shared <- wrappedStore st $ SharedState
         { ssPrev = []
         , ssType = Just $ sharedTypeID @(Maybe ComposedIdentity) Proxy
-        , ssValue = [ storedRef $ idExtData $ fromMaybe identity owner ]
+        , ssValue = [ storedRef $ idExtData owner ]
         }
     flip runReaderT globalHead $ do
         updateLocalState_ $ \_ -> do
@@ -88,6 +88,17 @@ setup = do
                 , lsShared = [ shared ]
                 , lsOther = []
                 }
+
+    setNameInput <- JS.getElementById "name_set_input"
+    setNameButton <- JS.getElementById "name_set_button"
+    JS.addEventListener setNameButton "click" $ \_ -> do
+        name <- T.pack . fromJSString <$> js_get_value setNameInput
+        js_set_value setNameInput $ toJSString ""
+        Just h <- reloadHead globalHead
+        res <- runExceptT $ flip runReaderT h $ updateSharedIdentity name
+        case res of
+            Right _ -> JS.consoleLog $ "Name set"
+            Left err -> JS.consoleLog $ "Failed to set name: " <> showErebosError err
 
     messagesList <- JS.getElementById "msg_list"
     tzone <- getCurrentTimeZone
@@ -125,6 +136,25 @@ setup = do
                     case res of
                         Right sent -> JS.consoleLog . ("sent message: " <>) $ formatDirectMessage tzone $ fromStored sent
                         Left err -> JS.consoleLog $ "Failed to send message: " <> err
+
+
+updateSharedIdentity :: (MonadHead LocalState m, MonadError e m, FromErebosError e) => Text -> m ()
+updateSharedIdentity name = updateLocalState_ $ updateSharedState_ $ \case
+    Just identity -> do
+        Just . toComposedIdentity <$> interactiveIdentityUpdate name identity
+    Nothing -> throwOtherError "no existing shared identity"
+
+interactiveIdentityUpdate :: (Foldable f, MonadStorage m, MonadIO m, MonadError e m, FromErebosError e) => Text -> Identity f -> m UnifiedIdentity
+interactiveIdentityUpdate name fidentity = do
+    identity <- mergeIdentity fidentity
+    if  | T.null name -> return identity
+        | otherwise -> do
+            secret <- loadKey $ idKeyIdentity identity
+            maybe (throwOtherError "created invalid identity") return . validateExtendedIdentity =<<
+                mstore =<< sign secret =<< mstore . ExtendedIdentityData =<< return (emptyIdentityExtension $ idData identity)
+                { idePrev = toList $ idExtDataF identity
+                , ideName = Just name
+                }
 
 
 foreign import javascript unsafe "document.getElementById($1)"
