@@ -56,15 +56,15 @@ setup = do
         H.div $ do
             "Name: "
             H.span ! A.id "name_text" $ return ()
-        H.div $ do
+        H.form ! A.id "name_set_form" ! A.action "javascript:void(0);" $ do
             H.input ! A.id "name_set_input" ! A.type_ "text"
-            H.button ! A.id "name_set_button" $ "set name"
+            H.input ! A.type_ "submit" ! A.value "set name"
         H.hr
         H.div $ do
             H.ul ! A.id "msg_list" $ return ()
-        H.div $ do
+        H.form ! A.id "msg_form" ! A.action "javascript:void(0);" $ do
             H.input ! A.id "msg_text" ! A.type_ "text"
-            H.button ! A.id "msg_send" $ "send"
+            H.input ! A.type_ "submit" ! A.value "send"
 
     nameElem <- js_document_getElementById (toJSString "name_text")
     _ <- watchHead globalHead $ \ls -> do
@@ -90,8 +90,8 @@ setup = do
                 }
 
     setNameInput <- JS.getElementById "name_set_input"
-    setNameButton <- JS.getElementById "name_set_button"
-    JS.addEventListener setNameButton "click" $ \_ -> do
+    setNameForm <- JS.getElementById "name_set_form"
+    JS.addEventListener setNameForm "submit" $ \_ -> do
         name <- T.pack . fromJSString <$> js_get_value setNameInput
         js_set_value setNameInput $ toJSString ""
         Just h <- reloadHead globalHead
@@ -109,7 +109,7 @@ setup = do
         js_appendChild messagesList li
 
     sendText <- JS.getElementById "msg_text"
-    sendButton <- JS.getElementById "msg_send"
+    sendForm <- JS.getElementById "msg_form"
 
     server <- startServer defaultServerOptions globalHead JS.consoleLog
         [ someService @ChatroomService Proxy
@@ -124,7 +124,7 @@ setup = do
             receivedFromCustomAddress server conn msg
 
         peer <- serverPeerCustom server conn
-        JS.addEventListener sendButton "click" $ \_ -> do
+        JS.addEventListener sendForm "submit" $ \_ -> do
             peerIdentity peer >>= \case
                 PeerIdentityUnknown {} -> JS.consoleLog "unknown peer identity"
                 PeerIdentityRef {} -> JS.consoleLog "unresolved peer identity"
