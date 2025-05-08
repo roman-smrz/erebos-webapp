@@ -97,13 +97,12 @@ setup = do
         Just h <- reloadHead globalHead
         res <- runExceptT $ flip runReaderT h $ updateSharedIdentity name
         case res of
-            Right _ -> JS.consoleLog $ "Name set"
+            Right _ -> return ()
             Left err -> JS.consoleLog $ "Failed to set name: " <> showErebosError err
 
     messagesList <- JS.getElementById "msg_list"
     tzone <- getCurrentTimeZone
     void $ watchReceivedMessages globalHead $ \msg -> do
-        JS.consoleLog $ formatDirectMessage tzone $ fromStored msg
         li <- js_document_createElement (toJSString "li")
         content <- js_document_createTextNode $ toJSString $ formatDirectMessage tzone $ fromStored msg
         js_appendChild li content
@@ -134,7 +133,7 @@ setup = do
                     js_set_value sendText $ toJSString ""
                     res <- runExceptT $ flip runReaderT globalHead $ sendDirectMessage pid msg
                     case res of
-                        Right sent -> JS.consoleLog . ("sent message: " <>) $ formatDirectMessage tzone $ fromStored sent
+                        Right _ -> return ()
                         Left err -> JS.consoleLog $ "Failed to send message: " <> err
 
 
