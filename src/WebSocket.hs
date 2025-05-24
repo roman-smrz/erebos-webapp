@@ -65,7 +65,9 @@ startClient addr port path fun = do
 sendMessage :: Connection -> ByteString -> IO ()
 sendMessage Connection {..} bs = do
     unsafeUseAsCStringLen bs $ \( ptr, len ) -> do
-        js_send connJS (castPtr ptr) len
+        js_send connJS (castPtr ptr) len >>= \case
+            0 -> return ()
+            1 -> error "websocket is not open"
 
 receiveMessage :: Connection -> IO ByteString
 receiveMessage Connection {..} = do
@@ -75,8 +77,8 @@ receiveMessage Connection {..} = do
 foreign import javascript unsafe "const ws = new WebSocket($1); ws.binaryType = 'arraybuffer'; return ws"
     js_initWebSocket :: JSString -> IO JSVal
 
-foreign import javascript unsafe "$1.send(new Uint8Array(globalThis.wasi_memory.buffer, $2, $3))"
-    js_send :: JSVal -> Ptr Word8 -> Int -> IO ()
+foreign import javascript unsafe "if ($1.readyState == WebSocket.OPEN) { $1.send(new Uint8Array(globalThis.wasi_memory.buffer, $2, $3)); return 0; } else { return 1; }"
+    js_send :: JSVal -> Ptr Word8 -> Int -> IO Int
 
 foreign import javascript unsafe "$1.data"
     js_get_data :: JSVal -> IO JSVal
