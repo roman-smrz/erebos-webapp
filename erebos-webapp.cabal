@@ -28,6 +28,7 @@ executable erebos-webapp
     main-is:          Main.hs
     other-modules:
         JavaScript
+        Storage.IndexedDB
         WebSocket
 
     default-extensions:
