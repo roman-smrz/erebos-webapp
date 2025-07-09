@@ -5,6 +5,8 @@ import Control.Monad
 import Control.Monad.Except
 import Control.Monad.Reader
 
+import Data.Bifunctor
+import Data.ByteString.Char8 qualified as BC
 import Data.Foldable
 import Data.Proxy
 import Data.Text (Text)
@@ -18,6 +20,7 @@ import Erebos.DirectMessage
 import Erebos.Discovery
 import Erebos.Identity
 import Erebos.Network
+import Erebos.Object
 import Erebos.PubKey
 import Erebos.Service
 import Erebos.State
@@ -65,6 +68,11 @@ setup = do
         H.form ! A.id "msg_form" ! A.action "javascript:void(0);" $ do
             H.input ! A.id "msg_text" ! A.type_ "text"
             H.input ! A.type_ "submit" ! A.value "send"
+        H.hr
+        H.div $ do
+            H.h2 $ do
+                "Peers"
+            H.ul ! A.id "peer_list" $ return ()
 
     nameElem <- js_document_getElementById (toJSString "name_text")
     _ <- watchHead globalHead $ \ls -> do
@@ -118,6 +126,9 @@ setup = do
         , someService @SyncService Proxy
         ]
 
+    peerList <- JS.getElementById "peer_list"
+    watchPeers server peerList
+
     startClient "localhost" 9160 "" $ \conn -> do
         void $ forkIO $ forever $ do
             msg <- receiveMessage conn
@@ -154,6 +165,38 @@ interactiveIdentityUpdate name fidentity = do
                 { idePrev = toList $ idExtDataF identity
                 , ideName = Just name
                 }
+
+
+watchPeers :: Server -> JSVal -> IO ()
+watchPeers server htmlList = do
+    peers <- liftIO $ newMVar []
+    void $ forkIO $ void $ forever $ do
+        peer <- getNextPeerChange server
+        peerIdentity peer >>= \case
+            pid@(PeerIdentityFull _) -> do
+                dropped <- isPeerDropped peer
+                let shown = showPeer pid $ peerAddress peer
+                let update [] = ( [ ( peer, shown ) ], ( Nothing, "NEW" ) )
+                    update (( p, s ) : ps)
+                        | p == peer && dropped = ( ps, ( Nothing, "DEL" ) )
+                        | p == peer = ( ( peer, shown ) : ps, ( Just s, "UPD" ) )
+                        | otherwise = first ( ( p, s ) :) $ update ps
+                (op, updateType) <- modifyMVar peers (return . update)
+                let updateType' = if dropped then "DEL" else updateType
+                when (Just shown /= op) $ do
+                    li <- js_document_createElement (toJSString "li")
+                    content <- js_document_createTextNode $ toJSString $ updateType' <> " " <> shown
+                    js_appendChild li content
+                    js_appendChild htmlList li
+            _ -> return ()
+
+showPeer :: PeerIdentity -> PeerAddress -> String
+showPeer pidentity paddr =
+    let name = case pidentity of
+                    PeerIdentityUnknown _  -> "<noid>"
+                    PeerIdentityRef wref _ -> "<" ++ BC.unpack (showRefDigest $ wrDigest wref) ++ ">"
+                    PeerIdentityFull pid   -> T.unpack $ displayIdentity pid
+     in name ++ " [" ++ show paddr ++ "]"
 
 
 foreign import javascript unsafe "document.getElementById($1)"
