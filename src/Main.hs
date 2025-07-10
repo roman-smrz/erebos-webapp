@@ -28,8 +28,6 @@ import Erebos.Storable
 import Erebos.Storage
 import Erebos.Sync
 
-import System.IO.Unsafe
-
 import Text.Blaze.Html5 ((!))
 import Text.Blaze.Html5 qualified as H
 import Text.Blaze.Html5.Attributes qualified as A
@@ -41,15 +39,18 @@ import WebSocket
 main :: IO ()
 main = error "unused"
 
-{-# NOINLINE globalStorage #-}
-globalStorage :: Storage
-globalStorage = unsafePerformIO $ memoryStorage
+data GlobalState = GlobalState
+    { globalStorage :: Storage
+    , globalHead :: Head LocalState
+    }
 
-{-# NOINLINE globalHead #-}
-globalHead :: Head LocalState
-globalHead = unsafePerformIO $ do
+initGlobalState :: IO GlobalState
+initGlobalState = do
+    globalStorage <- memoryStorage
     identity <- createIdentity globalStorage Nothing Nothing
-    storeHead globalStorage $ LocalState { lsPrev = Nothing, lsIdentity = idExtData identity, lsShared = [], lsOther = [] }
+    globalHead <- storeHead globalStorage $ LocalState
+        { lsPrev = Nothing, lsIdentity = idExtData identity, lsShared = [], lsOther = [] }
+    return GlobalState {..}
 
 foreign export javascript setup :: IO ()
 setup :: IO ()
@@ -73,6 +74,8 @@ setup = do
             H.h2 $ do
                 "Peers"
             H.ul ! A.id "peer_list" $ return ()
+
+    GlobalState {..} <- initGlobalState
 
     nameElem <- js_document_getElementById (toJSString "name_text")
     _ <- watchHead globalHead $ \ls -> do
