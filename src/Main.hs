@@ -16,8 +16,10 @@ import Data.Time.LocalTime
 import GHC.Wasm.Prim
 
 import Erebos.Chatroom
+import Erebos.Conversation
 import Erebos.DirectMessage
 import Erebos.Discovery
+import Erebos.Error
 import Erebos.Identity
 import Erebos.Network
 import Erebos.Object
@@ -34,7 +36,7 @@ import Text.Blaze.Html5.Attributes qualified as A
 import Text.Blaze.Html.Renderer.String
 
 import JavaScript qualified as JS
-import WebSocket
+import WebSocket (startClient, receiveMessage)
 
 main :: IO ()
 main = error "unused"
@@ -42,6 +44,7 @@ main = error "unused"
 data GlobalState = GlobalState
     { globalStorage :: Storage
     , globalHead :: Head LocalState
+    , currentConversationVar :: MVar (Maybe Conversation)
     }
 
 initGlobalState :: IO GlobalState
@@ -50,6 +53,7 @@ initGlobalState = do
     identity <- createIdentity globalStorage Nothing Nothing
     globalHead <- storeHead globalStorage $ LocalState
         { lsPrev = Nothing, lsIdentity = idExtData identity, lsShared = [], lsOther = [] }
+    currentConversationVar <- newMVar Nothing
     return GlobalState {..}
 
 foreign export javascript setup :: IO ()
@@ -65,7 +69,10 @@ setup = do
             H.input ! A.type_ "submit" ! A.value "set name"
         H.hr
         H.div $ do
-            H.ul ! A.id "msg_list" $ return ()
+            H.h2 ! A.id "msg_header" $ do
+                return ()
+            H.div ! A.id "msg_list" $ do
+                H.ul $ return ()
         H.form ! A.id "msg_form" ! A.action "javascript:void(0);" $ do
             H.input ! A.id "msg_text" ! A.type_ "text"
             H.input ! A.type_ "submit" ! A.value "send"
@@ -75,7 +82,7 @@ setup = do
                 "Peers"
             H.ul ! A.id "peer_list" $ return ()
 
-    GlobalState {..} <- initGlobalState
+    gs@GlobalState {..} <- initGlobalState
 
     nameElem <- js_document_getElementById (toJSString "name_text")
     _ <- watchHead globalHead $ \ls -> do
@@ -115,9 +122,9 @@ setup = do
     tzone <- getCurrentTimeZone
     void $ watchReceivedMessages globalHead $ \msg -> do
         li <- js_document_createElement (toJSString "li")
-        content <- js_document_createTextNode $ toJSString $ formatDirectMessage tzone $ fromStored msg
-        js_appendChild li content
-        js_appendChild messagesList li
+        js_set_textContent li $ toJSString $ formatDirectMessage tzone $ fromStored msg
+        ul <- js_get_firstChild messagesList
+        js_appendChild ul li
 
     sendText <- JS.getElementById "msg_text"
     sendForm <- JS.getElementById "msg_form"
@@ -130,25 +137,25 @@ setup = do
         ]
 
     peerList <- JS.getElementById "peer_list"
-    watchPeers server peerList
+    watchPeers gs server peerList
 
     startClient "localhost" 9160 "" $ \conn -> do
         void $ forkIO $ forever $ do
             msg <- receiveMessage conn
             receivedFromCustomAddress server conn msg
 
-        peer <- serverPeerCustom server conn
-        JS.addEventListener sendForm "submit" $ \_ -> do
-            peerIdentity peer >>= \case
-                PeerIdentityUnknown {} -> JS.consoleLog "unknown peer identity"
-                PeerIdentityRef {} -> JS.consoleLog "unresolved peer identity"
-                PeerIdentityFull pid -> do
-                    msg <- T.pack . fromJSString <$> js_get_value sendText
-                    js_set_value sendText $ toJSString ""
-                    res <- runExceptT $ flip runReaderT globalHead $ sendDirectMessage pid msg
-                    case res of
-                        Right _ -> return ()
-                        Left err -> JS.consoleLog $ "Failed to send message: " <> err
+        void $ serverPeerCustom server conn
+
+    JS.addEventListener sendForm "submit" $ \_ -> do
+        readMVar currentConversationVar >>= \case
+            Nothing -> JS.consoleLog "no selected conversation"
+            Just conv -> do
+                msg <- T.pack . fromJSString <$> js_get_value sendText
+                js_set_value sendText $ toJSString ""
+                res <- runExceptT $ flip runReaderT globalHead $ sendMessage conv msg
+                case res of
+                    Right _ -> return ()
+                    Left err -> JS.consoleLog $ "Failed to send message: " <> showErebosError err
 
 
 updateSharedIdentity :: (MonadHead LocalState m, MonadError e m, FromErebosError e) => Text -> m ()
@@ -170,13 +177,30 @@ interactiveIdentityUpdate name fidentity = do
                 }
 
 
-watchPeers :: Server -> JSVal -> IO ()
-watchPeers server htmlList = do
+selectConversation :: GlobalState -> Conversation -> IO ()
+selectConversation GlobalState {..} conv = do
+    void $ swapMVar currentConversationVar (Just conv)
+    header <- JS.getElementById "msg_header"
+    messagesList <- JS.getElementById "msg_list"
+
+    tzone <- getCurrentTimeZone
+    ul <- js_document_createElement (toJSString "ul")
+    forM_ (reverse $ conversationHistory conv) $ \msg -> do
+        li <- js_document_createElement (toJSString "li")
+        js_set_textContent li $ toJSString $ formatMessage tzone msg
+        js_appendChild ul li
+
+    js_set_textContent header $ toJSString $ T.unpack $ conversationName conv
+    js_replaceChildren messagesList ul
+
+
+watchPeers :: GlobalState -> Server -> JSVal -> IO ()
+watchPeers gs@GlobalState {..} server htmlList = do
     peers <- liftIO $ newMVar []
     void $ forkIO $ void $ forever $ do
         peer <- getNextPeerChange server
         peerIdentity peer >>= \case
-            pid@(PeerIdentityFull _) -> do
+            pid@(PeerIdentityFull pid') -> do
                 dropped <- isPeerDropped peer
                 let shown = showPeer pid $ peerAddress peer
                 let update [] = ( [ ( peer, shown ) ], ( Nothing, "NEW" ) )
@@ -187,9 +211,16 @@ watchPeers server htmlList = do
                 (op, updateType) <- modifyMVar peers (return . update)
                 let updateType' = if dropped then "DEL" else updateType
                 when (Just shown /= op) $ do
+                    a <- js_document_createElement (toJSString "a")
+                    js_setAttribute a (toJSString "href") (toJSString "javascript:void(0)")
+                    JS.addEventListener a "click" $ \_ -> do
+                        Just h <- reloadHead globalHead
+                        selectConversation gs =<< runReaderT (directMessageConversation $ finalOwner pid') h
+
                     li <- js_document_createElement (toJSString "li")
                     content <- js_document_createTextNode $ toJSString $ updateType' <> " " <> shown
-                    js_appendChild li content
+                    js_appendChild a content
+                    js_appendChild li a
                     js_appendChild htmlList li
             _ -> return ()
 
@@ -211,14 +242,23 @@ foreign import javascript unsafe "$1.innerHTML = $2"
 foreign import javascript unsafe "$1.textContent = $2"
     js_set_textContent :: JSVal -> JSString -> IO ()
 
+foreign import javascript unsafe "$1.firstChild"
+    js_get_firstChild :: JSVal -> IO JSVal
+
 foreign import javascript unsafe "$1.appendChild($2)"
     js_appendChild :: JSVal -> JSVal -> IO ()
+
+foreign import javascript unsafe "$1.replaceChildren($2)"
+    js_replaceChildren :: JSVal -> JSVal -> IO ()
 
 foreign import javascript unsafe "document.createElement($1)"
     js_document_createElement :: JSString -> IO JSVal
 
 foreign import javascript unsafe "document.createTextNode($1)"
     js_document_createTextNode :: JSString -> IO JSVal
+
+foreign import javascript unsafe "$1.setAttribute($2, $3)"
+    js_setAttribute :: JSVal -> JSString -> JSString -> IO ()
 
 foreign import javascript unsafe "$1.value"
     js_get_value :: JSVal -> IO JSString
