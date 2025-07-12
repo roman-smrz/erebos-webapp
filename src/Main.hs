@@ -8,9 +8,11 @@ import Control.Monad.Reader
 import Data.Bifunctor
 import Data.ByteString.Char8 qualified as BC
 import Data.Foldable
+import Data.Maybe
 import Data.Proxy
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Encoding
 import Data.Time.LocalTime
 
 import GHC.Wasm.Prim
@@ -64,6 +66,10 @@ setup = do
         H.div $ do
             "Name: "
             H.span ! A.id "name_text" $ return ()
+        H.div $ do
+            "("
+            H.span ! A.id "self_ref_value" $ return ()
+            ")"
         H.form ! A.id "name_set_form" ! A.action "javascript:void(0);" $ do
             H.input ! A.id "name_set_input" ! A.type_ "text"
             H.input ! A.type_ "submit" ! A.value "set name"
@@ -81,12 +87,19 @@ setup = do
             H.h2 $ do
                 "Peers"
             H.ul ! A.id "peer_list" $ return ()
+            H.form ! A.id "peer_add_form" ! A.action "javascript:void(0);" $ do
+                H.input ! A.id "peer_add_input" ! A.type_ "text"
+                H.input ! A.type_ "submit" ! A.value "search"
+
 
     gs@GlobalState {..} <- initGlobalState
 
     nameElem <- js_document_getElementById (toJSString "name_text")
+    selfRefElem <- js_document_getElementById (toJSString "self_ref_value")
     _ <- watchHead globalHead $ \ls -> do
-        js_set_textContent nameElem $ toJSString $ maybe "(Anonymous)" T.unpack $ idName $ finalOwner $ headLocalIdentity ls
+        let fowner = finalOwner $ headLocalIdentity ls
+        js_set_textContent nameElem $ toJSString $ maybe "(Anonymous)" T.unpack $ idName fowner
+        js_set_textContent selfRefElem $ toJSString $ maybe "" (show . refDigest . storedRef) $ listToMaybe $ idDataF fowner
 
     let devName = T.pack "WebApp"
     let st = globalStorage
@@ -144,7 +157,15 @@ setup = do
             msg <- receiveMessage conn
             receivedFromCustomAddress server conn msg
 
-        void $ serverPeerCustom server conn
+        peer <- serverPeerCustom server conn
+        peerAddInput <- JS.getElementById "peer_add_input"
+        peerAddForm <- JS.getElementById "peer_add_form"
+        JS.addEventListener peerAddForm "submit" $ \_ -> do
+            value <- T.pack . fromJSString <$> js_get_value peerAddInput
+            js_set_value peerAddInput $ toJSString ""
+            case readRefDigest $ encodeUtf8 value of
+                Just dgst -> discoverySetupTunnel peer dgst
+                Nothing -> JS.consoleLog "invalid identity reference"
 
     JS.addEventListener sendForm "submit" $ \_ -> do
         readMVar currentConversationVar >>= \case
