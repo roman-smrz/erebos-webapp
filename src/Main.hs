@@ -46,6 +46,7 @@ main = error "unused"
 data GlobalState = GlobalState
     { globalStorage :: Storage
     , globalHead :: Head LocalState
+    , peerListVar :: MVar [ ( Peer, String ) ]
     , currentConversationVar :: MVar (Maybe Conversation)
     }
 
@@ -55,6 +56,7 @@ initGlobalState = do
     identity <- createIdentity globalStorage Nothing Nothing
     globalHead <- storeHead globalStorage $ LocalState
         { lsPrev = Nothing, lsIdentity = idExtData identity, lsShared = [], lsOther = [] }
+    peerListVar <- newMVar []
     currentConversationVar <- newMVar Nothing
     return GlobalState {..}
 
@@ -217,7 +219,6 @@ selectConversation GlobalState {..} conv = do
 
 watchPeers :: GlobalState -> Server -> JSVal -> IO ()
 watchPeers gs@GlobalState {..} server htmlList = do
-    peers <- liftIO $ newMVar []
     void $ forkIO $ void $ forever $ do
         peer <- getNextPeerChange server
         peerIdentity peer >>= \case
@@ -229,7 +230,7 @@ watchPeers gs@GlobalState {..} server htmlList = do
                         | p == peer && dropped = ( ps, ( Nothing, "DEL" ) )
                         | p == peer = ( ( peer, shown ) : ps, ( Just s, "UPD" ) )
                         | otherwise = first ( ( p, s ) :) $ update ps
-                (op, updateType) <- modifyMVar peers (return . update)
+                (op, updateType) <- modifyMVar peerListVar (return . update)
                 let updateType' = if dropped then "DEL" else updateType
                 when (Just shown /= op) $ do
                     a <- js_document_createElement (toJSString "a")
