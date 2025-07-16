@@ -41,6 +41,7 @@ instance Show Connection where
 
 instance PeerAddressType Connection where
     sendBytesToAddress = sendMessage
+    connectionToAddressClosed = closeConnection
 
 startClient :: String -> Int -> String -> (Connection -> IO ()) -> IO ()
 startClient addr port path fun = do
@@ -73,12 +74,19 @@ receiveMessage :: Connection -> IO ByteString
 receiveMessage Connection {..} = do
     readChan connInQueue
 
+closeConnection :: Connection -> IO ()
+closeConnection Connection {..} = do
+    js_close connJS
+
 
 foreign import javascript unsafe "const ws = new WebSocket($1); ws.binaryType = 'arraybuffer'; return ws"
     js_initWebSocket :: JSString -> IO JSVal
 
 foreign import javascript unsafe "if ($1.readyState == WebSocket.OPEN) { $1.send(new Uint8Array(globalThis.wasi_memory.buffer, $2, $3)); return 0; } else { return 1; }"
     js_send :: JSVal -> Ptr Word8 -> Int -> IO Int
+
+foreign import javascript unsafe "$1.close()"
+    js_close :: JSVal -> IO ()
 
 foreign import javascript unsafe "$1.data"
     js_get_data :: JSVal -> IO JSVal
