@@ -95,13 +95,7 @@ setup = do
 
 
     gs@GlobalState {..} <- initGlobalState
-
-    nameElem <- js_document_getElementById (toJSString "name_text")
-    selfRefElem <- js_document_getElementById (toJSString "self_ref_value")
-    _ <- watchHead globalHead $ \ls -> do
-        let fowner = finalOwner $ headLocalIdentity ls
-        js_set_textContent nameElem $ toJSString $ maybe "(Anonymous)" T.unpack $ idName fowner
-        js_set_textContent selfRefElem $ toJSString $ maybe "" (show . refDigest . storedRef) $ listToMaybe $ idDataF fowner
+    watchIdentityUpdates gs
 
     let devName = T.pack "WebApp"
     let st = globalStorage
@@ -180,6 +174,15 @@ setup = do
                     Right _ -> return ()
                     Left err -> JS.consoleLog $ "Failed to send message: " <> showErebosError err
 
+
+watchIdentityUpdates :: GlobalState -> IO ()
+watchIdentityUpdates GlobalState {..} = do
+    nameElem <- js_document_getElementById (toJSString "name_text")
+    selfRefElem <- js_document_getElementById (toJSString "self_ref_value")
+    void $ watchHeadWith globalHead headLocalIdentity $ \lid -> do
+        let fowner = finalOwner lid
+        js_set_textContent nameElem $ toJSString $ maybe "(Anonymous)" T.unpack $ idName fowner
+        js_set_textContent selfRefElem $ toJSString $ maybe "" (show . refDigest . storedRef) $ listToMaybe $ idDataF fowner
 
 updateSharedIdentity :: (MonadHead LocalState m, MonadError e m, FromErebosError e) => Text -> m ()
 updateSharedIdentity name = updateLocalState_ $ updateSharedState_ $ \case
