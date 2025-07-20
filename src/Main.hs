@@ -48,6 +48,7 @@ data GlobalState = GlobalState
     , globalHead :: Head LocalState
     , peerListVar :: MVar [ ( Peer, String ) ]
     , currentConversationVar :: MVar (Maybe Conversation)
+    , conversationsVar :: MVar [ ( Int, Conversation ) ]
     }
 
 initGlobalState :: IO GlobalState
@@ -58,6 +59,7 @@ initGlobalState = do
         { lsPrev = Nothing, lsIdentity = idExtData identity, lsShared = [], lsOther = [] }
     peerListVar <- newMVar []
     currentConversationVar <- newMVar Nothing
+    conversationsVar <- newMVar []
     return GlobalState {..}
 
 foreign export javascript setup :: IO ()
@@ -87,6 +89,11 @@ setup = do
         H.hr
         H.div $ do
             H.h2 $ do
+                "Conversations"
+            H.div ! A.id "conversation_list" $ return ()
+        H.hr
+        H.div $ do
+            H.h2 $ do
                 "Peers"
             H.ul ! A.id "peer_list" $ return ()
             H.form ! A.id "peer_add_form" ! A.action "javascript:void(0);" $ do
@@ -96,6 +103,7 @@ setup = do
 
     gs@GlobalState {..} <- initGlobalState
     watchIdentityUpdates gs
+    watchConversations gs
 
     let devName = T.pack "WebApp"
     let st = globalStorage
@@ -202,6 +210,29 @@ interactiveIdentityUpdate name fidentity = do
                 , ideName = Just name
                 }
 
+
+watchConversations :: GlobalState -> IO ()
+watchConversations gs@GlobalState {..} = do
+    void $ watchHead globalHead $ \ls -> do
+        modifyMVar_ conversationsVar $ \_ -> do
+            conversations <- zip [1 ..] . fst <$>
+                runLocalHeadT lookupConversations globalStorage (headStoredObject ls)
+
+            convList <- JS.getElementById "conversation_list"
+            ul <- js_document_createElement (toJSString "ul")
+            forM_ conversations $ \( _, conv ) -> do
+                a <- js_document_createElement (toJSString "a")
+                js_setAttribute a (toJSString "href") (toJSString "javascript:void(0)")
+                JS.addEventListener a "click" $ \_ -> do
+                    selectConversation gs conv
+
+                li <- js_document_createElement (toJSString "li")
+                js_set_textContent a $ toJSString $ T.unpack $ conversationName conv
+                js_appendChild li a
+                js_appendChild ul li
+            js_replaceChildren convList ul
+
+            return conversations
 
 selectConversation :: GlobalState -> Conversation -> IO ()
 selectConversation GlobalState {..} conv = do
