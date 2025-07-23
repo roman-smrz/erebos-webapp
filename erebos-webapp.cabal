@@ -59,6 +59,7 @@ executable erebos-webapp
         bytestring ^>= { 0.12 },
         erebos ^>= { 0.1.8 },
         ghc-experimental ^>= { 9.1201, 9.1202 },
+        http-types ^>= { 0.12.4 },
         mtl ^>= { 2.3 },
         text ^>= { 2.1 },
         time ^>= { 1.14 },

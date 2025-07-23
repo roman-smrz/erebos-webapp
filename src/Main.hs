@@ -32,6 +32,8 @@ import Erebos.Storable
 import Erebos.Storage
 import Erebos.Sync
 
+import Network.HTTP.Types.URI
+
 import Text.Blaze.Html5 ((!))
 import Text.Blaze.Html5 qualified as H
 import Text.Blaze.Html5.Attributes qualified as A
@@ -182,6 +184,30 @@ setup = do
                     Right _ -> return ()
                     Left err -> JS.consoleLog $ "Failed to send message: " <> showErebosError err
 
+    processUrlParams gs server
+
+
+processUrlParams :: GlobalState -> Server -> IO ()
+processUrlParams GlobalState {} server = do
+    hash <- fromJSString <$> js_get_location_hash
+    case hash of
+        '#' : str -> do
+            let params = parseQuery $ BC.pack str
+            if
+              | Just _ <- lookup "inv" params
+              , Just from <- readRefDigest =<< id =<< lookup "from" params
+              -> do
+                runExceptT (discoverySearch server from) >>= \case
+                    Right () -> return ()
+                    Left err -> JS.consoleLog $ "Failed to search for " <> show from <> ": " <> showErebosError err
+
+              | otherwise -> do
+                JS.consoleLog $ "Unrecognized URL parameters: " <> show params
+
+            js_history_pushState (toJSString " ")
+
+        _ -> return ()
+
 
 watchIdentityUpdates :: GlobalState -> IO ()
 watchIdentityUpdates GlobalState {..} = do
@@ -321,3 +347,9 @@ foreign import javascript unsafe "$1.value"
 
 foreign import javascript unsafe "$1.value = $2"
     js_set_value :: JSVal -> JSString -> IO ()
+
+foreign import javascript unsafe "window.location.hash"
+    js_get_location_hash :: IO JSString
+
+foreign import javascript unsafe "history.pushState(null, '', $1)"
+    js_history_pushState :: JSString -> IO ()
