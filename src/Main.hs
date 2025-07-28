@@ -49,9 +49,14 @@ data GlobalState = GlobalState
     { globalStorage :: Storage
     , globalHead :: Head LocalState
     , peerListVar :: MVar [ ( Peer, String ) ]
-    , currentConversationVar :: MVar (Maybe Conversation)
+    , currentConversationVar :: MVar CurrentConversation
     , conversationsVar :: MVar [ ( Int, Conversation ) ]
     }
+
+data CurrentConversation
+    = NoCurrentConversation
+    | SelectedConversation Conversation
+    | WaitingForPeerConversation RefDigest
 
 initGlobalState :: IO GlobalState
 initGlobalState = do
@@ -60,7 +65,7 @@ initGlobalState = do
     globalHead <- storeHead globalStorage $ LocalState
         { lsPrev = Nothing, lsIdentity = idExtData identity, lsShared = [], lsOther = [] }
     peerListVar <- newMVar []
-    currentConversationVar <- newMVar Nothing
+    currentConversationVar <- newMVar NoCurrentConversation
     conversationsVar <- newMVar []
     return GlobalState {..}
 
@@ -177,20 +182,21 @@ setup = do
 
     JS.addEventListener sendForm "submit" $ \_ -> do
         readMVar currentConversationVar >>= \case
-            Nothing -> JS.consoleLog "no selected conversation"
-            Just conv -> do
+            NoCurrentConversation -> JS.consoleLog "no selected conversation"
+            SelectedConversation conv -> do
                 msg <- T.pack . fromJSString <$> js_get_value sendText
                 js_set_value sendText $ toJSString ""
                 res <- runExceptT $ flip runReaderT globalHead $ sendMessage conv msg
                 case res of
                     Right _ -> return ()
                     Left err -> JS.consoleLog $ "Failed to send message: " <> showErebosError err
+            WaitingForPeerConversation _ -> JS.consoleLog "waiting for peer to start conversation"
 
     processUrlParams gs server
 
 
 processUrlParams :: GlobalState -> Server -> IO ()
-processUrlParams GlobalState {} server = do
+processUrlParams GlobalState {..} server = do
     hash <- fromJSString <$> js_get_location_hash
     case hash of
         '#' : str -> do
@@ -199,6 +205,7 @@ processUrlParams GlobalState {} server = do
               | Just _ <- lookup "inv" params
               , Just from <- readRefDigest =<< id =<< lookup "from" params
               -> do
+                void $ swapMVar currentConversationVar $ WaitingForPeerConversation from
                 runExceptT (discoverySearch server from) >>= \case
                     Right () -> return ()
                     Left err -> JS.consoleLog $ "Failed to search for " <> show from <> ": " <> showErebosError err
@@ -264,7 +271,7 @@ watchConversations gs@GlobalState {..} = do
 
 selectConversation :: GlobalState -> Conversation -> IO ()
 selectConversation GlobalState {..} conv = do
-    void $ swapMVar currentConversationVar (Just conv)
+    void $ swapMVar currentConversationVar (SelectedConversation conv)
     header <- JS.getElementById "msg_header"
     messagesList <- JS.getElementById "msg_list"
 
@@ -298,14 +305,20 @@ watchPeers gs@GlobalState {..} server htmlList = do
                     a <- js_document_createElement (toJSString "a")
                     js_setAttribute a (toJSString "href") (toJSString "javascript:void(0)")
                     JS.addEventListener a "click" $ \_ -> do
-                        Just h <- reloadHead globalHead
-                        selectConversation gs =<< runReaderT (directMessageConversation $ finalOwner pid') h
+                        selectConversation gs =<< runReaderT (directMessageConversation $ finalOwner pid') globalHead
 
                     li <- js_document_createElement (toJSString "li")
                     content <- js_document_createTextNode $ toJSString $ updateType' <> " " <> shown
                     js_appendChild a content
                     js_appendChild li a
                     js_appendChild htmlList li
+
+                readMVar currentConversationVar >>= \case
+                    WaitingForPeerConversation dgst
+                      | dgst `elem` identityDigests pid' -> do
+                          selectConversation gs =<< runReaderT (directMessageConversation $ finalOwner pid') globalHead
+                    _ -> return ()
+
             _ -> return ()
 
 showPeer :: PeerIdentity -> PeerAddress -> String
@@ -315,6 +328,9 @@ showPeer pidentity paddr =
                     PeerIdentityRef wref _ -> "<" ++ BC.unpack (showRefDigest $ wrDigest wref) ++ ">"
                     PeerIdentityFull pid   -> T.unpack $ displayIdentity pid
      in name ++ " [" ++ show paddr ++ "]"
+
+identityDigests :: Foldable f => Identity f -> [ RefDigest ]
+identityDigests pid = map (refDigest . storedRef) $ idDataF =<< unfoldOwners pid
 
 
 foreign import javascript unsafe "document.getElementById($1)"
