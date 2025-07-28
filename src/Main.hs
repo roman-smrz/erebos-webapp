@@ -162,16 +162,18 @@ setup = do
         void $ forkIO $ forever $ do
             msg <- receiveMessage conn
             receivedFromCustomAddress server conn msg
+        void $ serverPeerCustom server conn
 
-        peer <- serverPeerCustom server conn
-        peerAddInput <- JS.getElementById "peer_add_input"
-        peerAddForm <- JS.getElementById "peer_add_form"
-        JS.addEventListener peerAddForm "submit" $ \_ -> do
-            value <- T.pack . fromJSString <$> js_get_value peerAddInput
-            js_set_value peerAddInput $ toJSString ""
-            case readRefDigest $ encodeUtf8 value of
-                Just dgst -> discoverySetupTunnel peer dgst
-                Nothing -> JS.consoleLog "invalid identity reference"
+    peerAddInput <- JS.getElementById "peer_add_input"
+    peerAddForm <- JS.getElementById "peer_add_form"
+    JS.addEventListener peerAddForm "submit" $ \_ -> do
+        value <- T.pack . fromJSString <$> js_get_value peerAddInput
+        js_set_value peerAddInput $ toJSString ""
+        case readRefDigest $ encodeUtf8 value of
+            Just dgst -> runExceptT (discoverySearch server dgst) >>= \case
+                Right _ -> return ()
+                Left err -> JS.consoleLog $ "Failed to search for " <> show dgst <> ": " <> showErebosError err
+            Nothing -> JS.consoleLog "invalid identity reference"
 
     JS.addEventListener sendForm "submit" $ \_ -> do
         readMVar currentConversationVar >>= \case
