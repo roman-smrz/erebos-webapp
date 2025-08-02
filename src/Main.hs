@@ -253,6 +253,20 @@ watchConversations gs@GlobalState {..} = do
             conversations <- zip [1 ..] . fst <$>
                 runLocalHeadT lookupConversations globalStorage (headStoredObject ls)
 
+            modifyMVar_ currentConversationVar $ \case
+                x@(SelectedConversation selected) -> do
+                    let updateCurrent [] = return x
+                        updateCurrent (( _, c ) : cs)
+                            | c `isSameConversation` selected = do
+                                when (conversationName c /= conversationName selected) $ do
+                                    header <- JS.getElementById "msg_header"
+                                    js_set_textContent header $ toJSString $ T.unpack $ conversationName c
+                                return $ SelectedConversation c
+                            | otherwise = do
+                                updateCurrent cs
+                    updateCurrent conversations
+                x -> return x
+
             convList <- JS.getElementById "conversation_list"
             ul <- js_document_createElement (toJSString "ul")
             forM_ conversations $ \( _, conv ) -> do
