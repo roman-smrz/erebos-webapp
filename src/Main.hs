@@ -5,7 +5,6 @@ import Control.Monad
 import Control.Monad.Except
 import Control.Monad.Reader
 
-import Data.Bifunctor
 import Data.ByteString.Char8 qualified as BC
 import Data.Foldable
 import Data.Maybe
@@ -48,7 +47,7 @@ main = error "unused"
 data GlobalState = GlobalState
     { globalStorage :: Storage
     , globalHead :: Head LocalState
-    , peerListVar :: MVar [ ( Peer, String ) ]
+    , peerListVar :: MVar [ ( Peer, String, JSVal ) ]
     , currentConversationVar :: MVar CurrentConversation
     , conversationsVar :: MVar [ ( Int, Conversation ) ]
     }
@@ -312,32 +311,46 @@ watchPeers gs@GlobalState {..} server htmlList = do
     void $ forkIO $ void $ forever $ do
         peer <- getNextPeerChange server
         getPeerIdentity peer >>= \case
-            pid@(PeerIdentityFull pid') -> do
+            pid@(PeerIdentityFull pidf) -> do
                 dropped <- isPeerDropped peer
                 shown <- showPeer pid <$> getPeerAddress peer
-                let update [] = ( [ ( peer, shown ) ], ( Nothing, "NEW" ) )
-                    update (( p, s ) : ps)
-                        | p == peer && dropped = ( ps, ( Nothing, "DEL" ) )
-                        | p == peer = ( ( peer, shown ) : ps, ( Just s, "UPD" ) )
-                        | otherwise = first ( ( p, s ) :) $ update ps
-                (op, updateType) <- modifyMVar peerListVar (return . update)
-                let updateType' = if dropped then "DEL" else updateType
-                when (Just shown /= op) $ do
-                    a <- js_document_createElement (toJSString "a")
-                    js_setAttribute a (toJSString "href") (toJSString "javascript:void(0)")
-                    JS.addEventListener a "click" $ \_ -> do
-                        selectConversation gs =<< runReaderT (directMessageConversation $ finalOwner pid') globalHead
+                let update [] = do
+                        a <- js_document_createElement (toJSString "a")
+                        js_setAttribute a (toJSString "href") (toJSString "javascript:void(0)")
+                        JS.addEventListener a "click" $ \_ -> do
+                            pidf' <- getPeerIdentity peer >>= \case
+                                PeerIdentityFull pidf' -> return pidf'
+                                _                      -> return pidf
+                            selectConversation gs =<< runReaderT (directMessageConversation $ finalOwner pidf') globalHead
 
-                    li <- js_document_createElement (toJSString "li")
-                    content <- js_document_createTextNode $ toJSString $ updateType' <> " " <> shown
-                    js_appendChild a content
-                    js_appendChild li a
-                    js_appendChild htmlList li
+                        li <- js_document_createElement (toJSString "li")
+                        js_set_textContent a $ toJSString shown
+                        js_appendChild li a
+                        js_appendChild htmlList li
+                        return [ ( peer, shown, li ) ]
+
+                    update (( p, s, li ) : ps)
+                        | p == peer && dropped
+                        = do
+                            js_element_remove li
+                            return ps
+
+                        | p == peer
+                        = do
+                            when (shown /= s) $ do
+                                a <- js_get_firstChild li
+                                js_set_textContent a $ toJSString shown
+                            return (( peer, shown, li ) : ps)
+
+                        | otherwise
+                        = do
+                            (( p, s, li ) :) <$> update ps
+                modifyMVar_ peerListVar update
 
                 readMVar currentConversationVar >>= \case
                     WaitingForPeerConversation dgst
-                      | dgst `elem` identityDigests pid' -> do
-                          selectConversation gs =<< runReaderT (directMessageConversation $ finalOwner pid') globalHead
+                      | dgst `elem` identityDigests pidf -> do
+                          selectConversation gs =<< runReaderT (directMessageConversation $ finalOwner pidf) globalHead
                     _ -> return ()
 
             _ -> return ()
@@ -375,8 +388,8 @@ foreign import javascript unsafe "$1.replaceChildren($2)"
 foreign import javascript unsafe "document.createElement($1)"
     js_document_createElement :: JSString -> IO JSVal
 
-foreign import javascript unsafe "document.createTextNode($1)"
-    js_document_createTextNode :: JSString -> IO JSVal
+foreign import javascript unsafe "$1.remove()"
+    js_element_remove :: JSVal -> IO ()
 
 foreign import javascript unsafe "$1.setAttribute($2, $3)"
     js_setAttribute :: JSVal -> JSString -> JSString -> IO ()
