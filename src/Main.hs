@@ -144,11 +144,18 @@ setup = do
 
     messagesList <- JS.getElementById "msg_list"
     tzone <- getCurrentTimeZone
-    void $ watchReceivedMessages globalHead $ \msg -> do
-        li <- js_document_createElement (toJSString "li")
-        js_set_textContent li $ toJSString $ formatDirectMessage tzone $ fromStored msg
-        ul <- js_get_firstChild messagesList
-        js_appendChild ul li
+    void $ watchDirectMessageThreads globalHead $ \prev cur -> do
+        withMVar currentConversationVar $ \case
+            SelectedConversation conv
+              | maybe False (msgPeer cur `sameIdentity`) (conversationPeer conv)
+              -> do
+                forM_ (reverse $ dmThreadToListSince prev cur) $ \msg -> do
+                    li <- js_document_createElement (toJSString "li")
+                    js_set_textContent li $ toJSString $ formatDirectMessage tzone msg
+                    ul <- js_get_firstChild messagesList
+                    js_appendChild ul li
+
+            _ -> return ()
 
     sendText <- JS.getElementById "msg_text"
     sendForm <- JS.getElementById "msg_form"
