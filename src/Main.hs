@@ -304,10 +304,10 @@ watchPeers :: GlobalState -> Server -> JSVal -> IO ()
 watchPeers gs@GlobalState {..} server htmlList = do
     void $ forkIO $ void $ forever $ do
         peer <- getNextPeerChange server
-        peerIdentity peer >>= \case
+        getPeerIdentity peer >>= \case
             pid@(PeerIdentityFull pid') -> do
                 dropped <- isPeerDropped peer
-                let shown = showPeer pid $ peerAddress peer
+                shown <- showPeer pid <$> getPeerAddress peer
                 let update [] = ( [ ( peer, shown ) ], ( Nothing, "NEW" ) )
                     update (( p, s ) : ps)
                         | p == peer && dropped = ( ps, ( Nothing, "DEL" ) )
