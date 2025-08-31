@@ -57,7 +57,7 @@ executable erebos-webapp
         base ^>= { 4.21 },
         blaze-html ^>= { 0.9 },
         bytestring ^>= { 0.12 },
-        erebos ^>= { 0.1.8 },
+        erebos ^>= { 0.2 },
         ghc-experimental ^>= { 9.1201, 9.1202 },
         http-types ^>= { 0.12.4 },
         mtl ^>= { 2.3 },

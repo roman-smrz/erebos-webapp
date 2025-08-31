@@ -60,13 +60,14 @@ data CurrentConversation
 initGlobalState :: IO GlobalState
 initGlobalState = do
     globalStorage <- memoryStorage
-    identity <- createIdentity globalStorage Nothing Nothing
-    globalHead <- storeHead globalStorage $ LocalState
-        { lsPrev = Nothing, lsIdentity = idExtData identity, lsShared = [], lsOther = [] }
-    peerListVar <- newMVar []
-    currentConversationVar <- newMVar NoCurrentConversation
-    conversationsVar <- newMVar []
-    return GlobalState {..}
+    (either (fail . showErebosError) return =<<) $ runExceptT $ flip runReaderT globalStorage $ do
+        identity <- createIdentity Nothing Nothing
+        globalHead <- storeHead globalStorage $ LocalState
+            { lsPrev = Nothing, lsIdentity = idExtData identity, lsShared = [], lsOther = [] }
+        peerListVar <- liftIO $ newMVar []
+        currentConversationVar <- liftIO $ newMVar NoCurrentConversation
+        conversationsVar <- liftIO $ newMVar []
+        return GlobalState {..}
 
 foreign export javascript setup :: IO ()
 setup :: IO ()
@@ -112,16 +113,15 @@ setup = do
     watchConversations gs
 
     let devName = T.pack "WebApp"
-    let st = globalStorage
-    owner <- createIdentity st Nothing Nothing
-    identity <- createIdentity st (Just devName) (Just owner)
+    (either (fail . showErebosError) return =<<) $ runExceptT $ flip runReaderT globalHead $ do
+        owner <- createIdentity Nothing Nothing
+        identity <- createIdentity (Just devName) (Just owner)
 
-    shared <- wrappedStore st $ SharedState
-        { ssPrev = []
-        , ssType = Just $ sharedTypeID @(Maybe ComposedIdentity) Proxy
-        , ssValue = [ storedRef $ idExtData owner ]
-        }
-    flip runReaderT globalHead $ do
+        shared <- mstore SharedState
+            { ssPrev = []
+            , ssType = Just $ sharedTypeID @(Maybe ComposedIdentity) Proxy
+            , ssValue = [ storedRef $ idExtData owner ]
+            }
         updateLocalState_ $ \_ -> do
             mstore $ LocalState
                 { lsPrev = Nothing
