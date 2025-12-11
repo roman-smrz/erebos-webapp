@@ -46,7 +46,7 @@ instance PeerAddressType Connection where
 startClient :: String -> Int -> String -> (Connection -> IO ()) -> IO ()
 startClient addr port path fun = do
     connUnique <- newUnique
-    let connAddress = "ws://" <> addr <> ":" <> show port <> "/" <> path
+    let connAddress = "wss://" <> addr <> ":" <> show port <> "/" <> path
     connJS <- js_initWebSocket (toJSString connAddress)
     connInQueue <- newChan
     let conn = Connection {..}
