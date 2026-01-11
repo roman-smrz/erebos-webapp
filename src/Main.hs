@@ -22,6 +22,7 @@ import Erebos.DirectMessage
 import Erebos.Discovery
 import Erebos.Error
 import Erebos.Identity
+import Erebos.Invite
 import Erebos.Network
 import Erebos.Object
 import Erebos.PubKey
@@ -55,7 +56,7 @@ data GlobalState = GlobalState
 data CurrentConversation
     = NoCurrentConversation
     | SelectedConversation Conversation
-    | WaitingForPeerConversation RefDigest
+    | WaitingForPeerConversation RefDigest InviteToken
 
 initGlobalState :: IO GlobalState
 initGlobalState = do
@@ -164,6 +165,7 @@ setup = do
         , someService @DiscoveryService Proxy
         , someService @DirectMessage Proxy
         , someService @SyncService Proxy
+        , someService @InviteService Proxy
         ]
 
     peerList <- JS.getElementById "peer_list"
@@ -196,7 +198,7 @@ setup = do
                 case res of
                     Right _ -> return ()
                     Left err -> JS.consoleLog $ "Failed to send message: " <> showErebosError err
-            WaitingForPeerConversation _ -> JS.consoleLog "waiting for peer to start conversation"
+            WaitingForPeerConversation _ _ -> JS.consoleLog "waiting for peer to start conversation"
 
     processUrlParams gs server
 
@@ -208,10 +210,10 @@ processUrlParams GlobalState {..} server = do
         '#' : str -> do
             let params = parseQuery $ BC.pack str
             if
-              | Just _ <- lookup "inv" params
+              | Just token <- parseInviteToken . decodeUtf8 =<< id =<< lookup "inv" params
               , Just from <- readRefDigest =<< id =<< lookup "from" params
               -> do
-                void $ swapMVar currentConversationVar $ WaitingForPeerConversation from
+                void $ swapMVar currentConversationVar $ WaitingForPeerConversation from token
                 runExceptT (discoverySearch server from) >>= \case
                     Right () -> return ()
                     Left err -> JS.consoleLog $ "Failed to search for " <> show from <> ": " <> showErebosError err
@@ -348,8 +350,11 @@ watchPeers gs@GlobalState {..} server htmlList = do
                 modifyMVar_ peerListVar update
 
                 readMVar currentConversationVar >>= \case
-                    WaitingForPeerConversation dgst
+                    WaitingForPeerConversation dgst token
                       | dgst `elem` identityDigests pidf -> do
+                          Just h <- reloadHead globalHead
+                          (either (fail . showErebosError) return =<<) $ runExceptT $ flip runReaderT h $ do
+                              acceptInvite dgst token
                           selectConversation gs =<< runReaderT (directMessageConversation $ finalOwner pidf) globalHead
                     _ -> return ()
 
