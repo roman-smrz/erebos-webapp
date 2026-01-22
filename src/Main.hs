@@ -84,7 +84,7 @@ setup = do
             ")"
         H.form ! A.id "name_set_form" ! A.action "javascript:void(0);" $ do
             H.input ! A.id "name_set_input" ! A.type_ "text"
-            H.input ! A.type_ "submit" ! A.value "set name"
+            H.button ! A.type_ "submit" $ "set name"
         H.hr
         H.div $ do
             H.h2 ! A.id "msg_header" $ do
@@ -93,12 +93,22 @@ setup = do
                 H.ul $ return ()
         H.form ! A.id "msg_form" ! A.action "javascript:void(0);" $ do
             H.input ! A.id "msg_text" ! A.type_ "text"
-            H.input ! A.type_ "submit" ! A.value "send"
+            H.button ! A.type_ "submit" $ "send"
         H.hr
         H.div $ do
             H.h2 $ do
                 "Conversations"
             H.div ! A.id "conversation_list" $ return ()
+        H.hr
+        H.div $ do
+            H.h2 $ do
+                "Invite contact"
+            H.form ! A.id "invite_generate" ! A.action "javascript:void(0);" $ do
+                "Name: "
+                H.input ! A.id "invite_name"
+                H.button ! A.type_ "submit" $ "create invite"
+            H.div ! A.id "invite_generated" $ do
+                H.span ! A.id "invite_generated_url" $ return ()
         H.hr
         H.div $ do
             H.h2 $ do
@@ -176,6 +186,25 @@ setup = do
             msg <- receiveMessage conn
             receivedFromCustomAddress server conn msg
         void $ serverPeerCustom server conn
+
+    inviteGenerateInput <- JS.getElementById "invite_name"
+    inviteGenerateForm <- JS.getElementById "invite_generate"
+    inviteGeneratedUrl <- JS.getElementById "invite_generated_url"
+    JS.addEventListener inviteGenerateForm "submit" $ \_ -> do
+        name <- T.pack . fromJSString <$> js_get_value inviteGenerateInput
+        js_set_value inviteGenerateInput $ toJSString ""
+        href <- fromJSString <$> js_get_location_href
+        res <- runExceptT $ flip runReaderT globalHead $ do
+            (lookupSharedValue . lsShared . fromStored <$> getLocalHead) >>= \case
+                Just (self :: ComposedIdentity) -> do
+                    invite <- createSingleContactInvite name
+                    dgst : _ <- return $ refDigest . storedRef <$> idDataF self
+                    return $ href <> "#inv" <> (maybe "" (("=" <>) . showInviteToken) (inviteToken invite)) <> "&from=blake2%23" <> drop 7 (show dgst)
+                Nothing -> do
+                    throwOtherError "no shared identity"
+        case res of
+            Right inviteText -> js_set_textContent inviteGeneratedUrl $ toJSString inviteText
+            Left err -> JS.consoleLog $ "Failed to send message: " <> showErebosError err
 
     peerAddInput <- JS.getElementById "peer_add_input"
     peerAddForm <- JS.getElementById "peer_add_form"
@@ -407,6 +436,9 @@ foreign import javascript unsafe "$1.value = $2"
 
 foreign import javascript unsafe "window.location.hash"
     js_get_location_hash :: IO JSString
+
+foreign import javascript unsafe "window.location.href"
+    js_get_location_href :: IO JSString
 
 foreign import javascript unsafe "history.pushState(null, '', $1)"
     js_history_pushState :: JSString -> IO ()
