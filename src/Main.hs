@@ -109,6 +109,7 @@ setup = do
                 H.button ! A.type_ "submit" $ "create invite"
             H.div ! A.id "invite_generated" $ do
                 H.span ! A.id "invite_generated_url" $ return ()
+                H.button ! A.id "invite_clipboard" $ "copy to clipboard"
         H.hr
         H.div $ do
             H.h2 $ do
@@ -190,6 +191,7 @@ setup = do
     inviteGenerateInput <- JS.getElementById "invite_name"
     inviteGenerateForm <- JS.getElementById "invite_generate"
     inviteGeneratedUrl <- JS.getElementById "invite_generated_url"
+    inviteClipboard <- JS.getElementById "invite_clipboard"
     JS.addEventListener inviteGenerateForm "submit" $ \_ -> do
         name <- T.pack . fromJSString <$> js_get_value inviteGenerateInput
         js_set_value inviteGenerateInput $ toJSString ""
@@ -205,6 +207,8 @@ setup = do
         case res of
             Right inviteText -> js_set_textContent inviteGeneratedUrl $ toJSString inviteText
             Left err -> JS.consoleLog $ "Failed to send message: " <> showErebosError err
+    JS.addEventListener inviteClipboard "click" $ \_ -> do
+        js_navigator_clipboard_writeText =<< js_get_textContent inviteGeneratedUrl
 
     peerAddInput <- JS.getElementById "peer_add_input"
     peerAddForm <- JS.getElementById "peer_add_form"
@@ -410,6 +414,9 @@ foreign import javascript unsafe "$1.innerHTML = $2"
 foreign import javascript unsafe "$1.textContent = $2"
     js_set_textContent :: JSVal -> JSString -> IO ()
 
+foreign import javascript unsafe "$1.textContent"
+    js_get_textContent :: JSVal -> IO JSString
+
 foreign import javascript unsafe "$1.firstChild"
     js_get_firstChild :: JSVal -> IO JSVal
 
@@ -442,3 +449,6 @@ foreign import javascript unsafe "window.location.href"
 
 foreign import javascript unsafe "history.pushState(null, '', $1)"
     js_history_pushState :: JSString -> IO ()
+
+foreign import javascript unsafe "navigator.clipboard.writeText($1)"
+    js_navigator_clipboard_writeText :: JSString -> IO ()
