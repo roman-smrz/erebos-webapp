@@ -28,6 +28,9 @@ data IndexedDBStorage = IndexedDBStorage
     , bsDatabase :: JSVal
     , bsHeads :: MVar [ (( HeadTypeID, HeadID ), RefDigest ) ]
     , bsWatchers :: MVar WatchList
+    , idbReadLock :: MVar ()
+    , idbReadValue :: MVar (Maybe BL.ByteString)
+    , idbReadHandler :: JSVal
     }
 
 instance Eq IndexedDBStorage where
@@ -38,22 +41,15 @@ instance Show IndexedDBStorage where
 
 instance StorageBackend IndexedDBStorage where
     backendLoadBytes IndexedDBStorage {..} dgst = do
-        mvar <- newEmptyMVar
-        handler <- JS.asEventListener $ \ev -> do
-            res <- js_get_targetResult ev
-            js_get_byteLength res >>= \case
-                0 -> putMVar mvar $ Nothing
-                len -> do
-                    ptr <- mallocBytes len
-                    js_copyBytes ptr res
-                    bs <- unsafePackCStringFinalizer ptr len (free ptr)
-                    putMVar mvar $ Just $ BL.fromStrict bs
-        js_db_get bsDatabase (toJSString "objects") (toJSString $ show dgst) handler
-        takeMVar mvar
+        withMVar idbReadLock $ \_ -> do
+            unsafeUseAsCStringLen (refDigestBytes dgst) $ \( dgstPtr, dgstLen ) -> do
+                js_db_get bsDatabase (toJSString "objects") (castPtr dgstPtr) dgstLen idbReadHandler
+                takeMVar idbReadValue
 
     backendStoreBytes IndexedDBStorage {..} dgst raw = do
-        unsafeUseAsCStringLen (BL.toStrict raw) $ \( ptr, len ) -> do
-            js_db_put bsDatabase (toJSString "objects") (toJSString $ show dgst) (castPtr ptr) len
+        unsafeUseAsCStringLen (refDigestBytes dgst) $ \( dgstPtr, dgstLen ) -> do
+            unsafeUseAsCStringLen (BL.toStrict raw) $ \( ptr, len ) -> do
+                js_db_put bsDatabase (toJSString "objects") (castPtr dgstPtr) dgstLen (castPtr ptr) len
 
 
     backendLoadHeads IndexedDBStorage {..} tid = do
@@ -97,12 +93,14 @@ instance StorageBackend IndexedDBStorage where
             js_copyBytes ptr res
             bs <- unsafePackCStringFinalizer ptr len (free ptr)
             putMVar mvar $ Just bs
-        js_db_get bsDatabase (toJSString "keys") (toJSString $ show dgst) handler
+        unsafeUseAsCStringLen (refDigestBytes dgst) $ \( dgstPtr, dgstLen ) -> do
+            js_db_get bsDatabase (toJSString "keys") (castPtr dgstPtr) dgstLen handler
         takeMVar mvar
 
     backendStoreKey IndexedDBStorage {..} dgst key = do
-        unsafeUseAsCStringLen key $ \( ptr, len ) -> do
-            js_db_put bsDatabase (toJSString "keys") (toJSString $ show dgst) (castPtr ptr) len
+        unsafeUseAsCStringLen (refDigestBytes dgst) $ \( dgstPtr, dgstLen ) -> do
+            unsafeUseAsCStringLen key $ \( ptr, len ) -> do
+                js_db_put bsDatabase (toJSString "keys") (castPtr dgstPtr) dgstLen (castPtr ptr) len
 
     backendRemoveKey IndexedDBStorage {..} dgst = do
         js_db_delete bsDatabase (toJSString "keys") (toJSString $ show dgst)
@@ -117,8 +115,20 @@ indexedDBStorage bsName = do
     bsDatabase <- takeMVar dbVar
     bsHeads <- newMVar []
     bsWatchers <- newMVar (WatchList startWatchID [])
-    newStorage IndexedDBStorage {..}
 
+    idbReadLock <- newMVar ()
+    idbReadValue <- newEmptyMVar
+    idbReadHandler <- JS.asEventListener $ \ev -> do
+        res <- js_get_targetResult ev
+        js_get_byteLength res >>= \case
+            0 -> putMVar idbReadValue $ Nothing
+            len -> do
+                ptr <- mallocBytes len
+                js_copyBytes ptr res
+                bs <- unsafePackCStringFinalizer ptr len (free ptr)
+                putMVar idbReadValue $ Just $ BL.fromStrict bs
+
+    newStorage IndexedDBStorage {..}
 
 
 data WatchList = WatchList
@@ -154,12 +164,12 @@ foreign import javascript unsafe
 
 
 foreign import javascript unsafe
-    "const tr = $1.transaction($2, \"readwrite\"); tr.onerror = (event) => { console.log(\"put transaction error\"); }; tr.objectStore($2).put(new Uint8Array(globalThis.wasi_memory.buffer, $4, $5), $3); tr.commit();"
-    js_db_put :: JSVal -> JSString -> JSString -> Ptr Word8 -> Int -> IO ()
+    "const tr = $1.transaction($2, \"readwrite\"); tr.onerror = (event) => { console.log(\"put transaction error\"); }; const key = new Uint8Array(globalThis.wasi_memory.buffer, $3, $4); const value = new Uint8Array(globalThis.wasi_memory.buffer, $5, $6); tr.objectStore($2).put(value, key); tr.commit();"
+    js_db_put :: JSVal -> JSString -> Ptr Word8 -> Int -> Ptr Word8 -> Int -> IO ()
 
 foreign import javascript unsafe
-    "const tr = $1.transaction($2, \"readonly\"); tr.onerror = (event) => { console.log(\"get transaction error\"); }; const req = tr.objectStore($2).get($3); req.onsuccess = $4; tr.commit();"
-    js_db_get :: JSVal -> JSString -> JSString -> JSVal -> IO ()
+    "const tr = $1.transaction($2, \"readonly\"); tr.onerror = (event) => { console.log(\"get transaction error\"); }; const req = tr.objectStore($2).get(new Uint8Array(globalThis.wasi_memory.buffer, $3, $4)); req.onsuccess = $5; tr.commit();"
+    js_db_get :: JSVal -> JSString -> Ptr Word8 -> Int -> JSVal -> IO ()
 
 foreign import javascript unsafe
     "const tr = $1.transaction($2, \"readwrite\"); tr.onerror = (event) => { console.log(\"delete transaction error\"); }; const req = tr.objectStore($2).delete($3); tr.commit();"
