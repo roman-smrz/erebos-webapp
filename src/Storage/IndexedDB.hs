@@ -21,6 +21,7 @@ import Foreign.Ptr
 import GHC.Wasm.Prim
 
 import JavaScript qualified as JS
+import Storage.WatchList
 
 
 data IndexedDBStorage = IndexedDBStorage
@@ -129,33 +130,6 @@ indexedDBStorage bsName = do
                 putMVar idbReadValue $ Just $ BL.fromStrict bs
 
     newStorage IndexedDBStorage {..}
-
-
-data WatchList = WatchList
-    { wlNext :: WatchID
-    , wlList :: [ WatchListItem ]
-    }
-
-data WatchListItem = WatchListItem
-    { wlID :: WatchID
-    , wlHead :: ( HeadTypeID, HeadID )
-    , wlFun :: RefDigest -> IO ()
-    }
-
-watchListAdd :: HeadTypeID -> HeadID -> (RefDigest -> IO ()) -> WatchList -> ( WatchList, WatchID )
-watchListAdd tid hid cb wl = ( wl', wlNext wl )
-  where
-    wl' = wl
-        { wlNext = nextWatchID (wlNext wl)
-        , wlList = WatchListItem
-            { wlID = wlNext wl
-            , wlHead = (tid, hid)
-            , wlFun = cb
-            } : wlList wl
-        }
-
-watchListDel :: WatchID -> WatchList -> WatchList
-watchListDel wid wl = wl { wlList = filter ((/= wid) . wlID) $ wlList wl }
 
 
 foreign import javascript unsafe
