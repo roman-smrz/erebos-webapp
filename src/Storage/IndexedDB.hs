@@ -3,17 +3,19 @@ module Storage.IndexedDB (
 ) where
 
 import Control.Concurrent.MVar
+import Control.Monad
 
+import Data.ByteString.Char8 qualified as BC
 import Data.ByteString.Lazy qualified as BL
 import Data.ByteString.Unsafe
 import Data.Function
-import Data.List
 import Data.Maybe
+import Data.UUID.Types qualified as U
 import Data.Word
 
 import Erebos.Object
+import Erebos.Storable
 import Erebos.Storage.Backend
-import Erebos.Storage.Head
 
 import Foreign.Marshal.Alloc
 import Foreign.Ptr
@@ -27,7 +29,6 @@ import Storage.WatchList
 data IndexedDBStorage = IndexedDBStorage
     { bsName :: String
     , bsDatabase :: JSVal
-    , bsHeads :: MVar [ (( HeadTypeID, HeadID ), RefDigest ) ]
     , bsWatchers :: MVar WatchList
     , idbReadLock :: MVar ()
     , idbReadValue :: MVar (Maybe BL.ByteString)
@@ -54,25 +55,75 @@ instance StorageBackend IndexedDBStorage where
 
 
     backendLoadHeads IndexedDBStorage {..} tid = do
-        let toRes ( ( tid', hid ), dgst )
-                | tid' == tid = Just ( hid, dgst )
-                | otherwise   = Nothing
-        catMaybes . map toRes <$> readMVar bsHeads
+        mvar <- newEmptyMVar
+        handler <- JS.asEventListener $ \ev -> do
+            res <- js_get_targetResult ev
+            count <- js_get_length res
+            keys <- forM [ 0 .. count - 1 ] $ \i -> do
+                jkey <- js_array_index res i
+                len <- js_get_byteLength jkey
+                ptr <- mallocBytes len
+                js_copyBytes ptr jkey
+                unsafePackCStringFinalizer ptr len (free ptr)
 
-    backendLoadHead IndexedDBStorage {..} tid hid =
-        lookup (tid, hid) <$> readMVar bsHeads
+            pairs <- fmap catMaybes $ forM (filter ((BC.pack (U.toString (toUUID tid)) ==) . BC.take 36) keys) $ \bkey -> do
+                case U.fromString $ BC.unpack $ BC.drop 37 bkey of
+                    Just uhid -> do
+                        unsafeUseAsCStringLen bkey $ \( bkeyPtr, bkeyLen ) -> do
+                            js_db_get bsDatabase (toJSString "heads") (castPtr bkeyPtr) bkeyLen idbReadHandler
+                        dgst <- takeMVar idbReadValue
+                        return $ ( fromUUID uhid, ) <$> (readRefDigest . BL.toStrict =<< dgst)
+                    Nothing -> do
+                        return Nothing
+            putMVar mvar pairs
+        withMVar idbReadLock $ \_ -> do
+            js_db_get_all_keys bsDatabase (toJSString "heads") handler
+            takeMVar mvar
+
+    backendLoadHead IndexedDBStorage {..} tid hid = do
+        withMVar idbReadLock $ \_ -> do
+            mvar <- newEmptyMVar
+            handler <- JS.asEventListener $ \ev -> do
+                res <- js_get_targetResult ev
+                len <- js_get_byteLength res
+                ptr <- mallocBytes len
+                js_copyBytes ptr res
+                bs <- unsafePackCStringFinalizer ptr len (free ptr)
+                putMVar mvar $ readRefDigest bs
+            unsafeUseAsCStringLen (BC.pack $ U.toString (toUUID tid) ++ "_" ++ U.toString (toUUID hid)) $ \( keyPtr, keyLen ) -> do
+                js_db_get bsDatabase (toJSString "heads") (castPtr keyPtr) keyLen handler
+            takeMVar mvar
 
     backendStoreHead IndexedDBStorage {..} tid hid dgst =
-        modifyMVar_ bsHeads $ return . (( ( tid, hid ), dgst ) :)
+        withMVar idbReadLock $ \_ -> do
+            unsafeUseAsCStringLen (BC.pack $ U.toString (toUUID tid) ++ "_" ++ U.toString (toUUID hid)) $ \( keyPtr, keyLen ) -> do
+                unsafeUseAsCStringLen (showRefDigest dgst) $ \( ptr, len ) -> do
+                    js_db_put bsDatabase (toJSString "heads") (castPtr keyPtr) keyLen (castPtr ptr) len
 
     backendReplaceHead IndexedDBStorage {..} tid hid expected new = do
-        res <- modifyMVar bsHeads $ \hs -> do
-            ws <- map wlFun . filter ((==(tid, hid)) . wlHead) . wlList <$> readMVar bsWatchers
-            return $ case partition ((==(tid, hid)) . fst) hs of
-                ( [] , _ ) -> ( hs, Left Nothing )
-                (( _, dgst ) : _, hs' )
-                    | dgst == expected -> ((( tid, hid ), new ) : hs', Right ( new, ws ))
-                    | otherwise -> ( hs, Left $ Just dgst )
+        res <- withMVar idbReadLock $ \_ -> do
+            mvar <- newEmptyMVar
+            handler <- JS.asEventListener $ \ev -> do
+                res <- js_get_targetResult ev
+                len <- js_get_byteLength res
+                ptr <- mallocBytes len
+                js_copyBytes ptr res
+                bs <- unsafePackCStringFinalizer ptr len (free ptr)
+                putMVar mvar $ readRefDigest bs
+            unsafeUseAsCStringLen (BC.pack $ U.toString (toUUID tid) ++ "_" ++ U.toString (toUUID hid)) $ \( keyPtr, keyLen ) ->
+                unsafeUseAsCStringLen (showRefDigest new) $ \( nptr, nlen ) -> do
+                    js_db_get bsDatabase (toJSString "heads") (castPtr keyPtr) keyLen handler
+                    takeMVar mvar >>= \case
+                        Just dgst
+                            | dgst == expected
+                            -> do
+                                js_db_put bsDatabase (toJSString "heads") (castPtr keyPtr) keyLen (castPtr nptr) nlen
+                                ws <- map wlFun . filter ((==(tid, hid)) . wlHead) . wlList <$> readMVar bsWatchers
+                                return $ Right ( new, ws )
+                            | otherwise -> do
+                                return $ Left (Just dgst)
+                        Nothing -> do
+                            return $ Left Nothing
         case res of
             Right ( dgst, ws ) -> mapM_ ($ dgst) ws >> return (Right dgst)
             Left x -> return $ Left x
@@ -114,7 +165,6 @@ indexedDBStorage bsName = do
         putMVar dbVar db
     js_indexedDB_open (toJSString bsName) handler
     bsDatabase <- takeMVar dbVar
-    bsHeads <- newMVar []
     bsWatchers <- newMVar (WatchList startWatchID [])
 
     idbReadLock <- newMVar ()
@@ -149,6 +199,10 @@ foreign import javascript unsafe
     "const tr = $1.transaction($2, \"readwrite\"); tr.onerror = (event) => { console.log(\"delete transaction error\"); }; const req = tr.objectStore($2).delete($3); tr.commit();"
     js_db_delete :: JSVal -> JSString -> JSString -> IO ()
 
+foreign import javascript unsafe
+    "const tr = $1.transaction($2, \"readonly\"); tr.onerror = (event) => { console.log(\"list transaction error\"); }; const req = tr.objectStore($2).getAllKeys(); req.onsuccess = $3; tr.commit();"
+    js_db_get_all_keys :: JSVal -> JSString -> JSVal -> IO ()
+
 foreign import javascript unsafe "$1.target.result"
     js_get_targetResult :: JSVal -> IO JSVal
 
@@ -158,3 +212,9 @@ foreign import javascript unsafe "if (!$1) { return 0; }; return $1.byteLength"
 
 foreign import javascript unsafe "new Uint8Array(globalThis.wasi_memory.buffer, $1, $2.byteLength).set(new Uint8Array($2))"
     js_copyBytes :: Ptr Word8 -> JSVal -> IO ()
+
+foreign import javascript unsafe "$1.length"
+    js_get_length :: JSVal -> IO Int
+
+foreign import javascript unsafe "$1[$2]"
+    js_array_index :: JSVal -> Int -> IO JSVal
