@@ -40,6 +40,8 @@ import Text.Blaze.Html5.Attributes qualified as A
 import Text.Blaze.Html.Renderer.String
 
 import JavaScript qualified as JS
+import Storage.Cache
+import Storage.IndexedDB
 import WebSocket (startClient, receiveMessage)
 
 main :: IO ()
@@ -60,11 +62,30 @@ data CurrentConversation
 
 initGlobalState :: IO GlobalState
 initGlobalState = do
-    globalStorage <- memoryStorage
+    --globalStorage <- memoryStorage
+    globalStorage <- cacheStorage =<< indexedDBStorage "erebos"
     (either (fail . showErebosError) return =<<) $ runExceptT $ flip runReaderT globalStorage $ do
-        identity <- createIdentity Nothing Nothing
-        globalHead <- storeHead globalStorage $ LocalState
-            { lsPrev = Nothing, lsIdentity = idExtData identity, lsShared = [], lsOther = [] }
+        globalHead <- loadHeads globalStorage >>= \case
+            (h : _) -> do
+                return h
+            [] -> do
+                let devName = T.pack "WebApp"
+                owner <- createIdentity Nothing Nothing
+                identity <- createIdentity (Just devName) (Just owner)
+
+                shared <- mstore SharedState
+                    { ssPrev = []
+                    , ssType = Just $ sharedTypeID @(Maybe ComposedIdentity) Proxy
+                    , ssValue = [ storedRef $ idExtData owner ]
+                    }
+
+                storeHead globalStorage $ LocalState
+                    { lsPrev = Nothing
+                    , lsIdentity = idExtData identity
+                    , lsShared = [ shared ]
+                    , lsOther = []
+                    }
+
         peerListVar <- liftIO $ newMVar []
         currentConversationVar <- liftIO $ newMVar NoCurrentConversation
         conversationsVar <- liftIO $ newMVar []
@@ -123,24 +144,6 @@ setup = do
     gs@GlobalState {..} <- initGlobalState
     watchIdentityUpdates gs
     watchConversations gs
-
-    let devName = T.pack "WebApp"
-    (either (fail . showErebosError) return =<<) $ runExceptT $ flip runReaderT globalHead $ do
-        owner <- createIdentity Nothing Nothing
-        identity <- createIdentity (Just devName) (Just owner)
-
-        shared <- mstore SharedState
-            { ssPrev = []
-            , ssType = Just $ sharedTypeID @(Maybe ComposedIdentity) Proxy
-            , ssValue = [ storedRef $ idExtData owner ]
-            }
-        updateLocalState_ $ \_ -> do
-            mstore $ LocalState
-                { lsPrev = Nothing
-                , lsIdentity = idExtData identity
-                , lsShared = [ shared ]
-                , lsOther = []
-                }
 
     setNameInput <- JS.getElementById "name_set_input"
     setNameForm <- JS.getElementById "name_set_form"
