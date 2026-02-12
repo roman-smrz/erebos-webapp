@@ -96,49 +96,53 @@ setup :: IO ()
 setup = do
     body <- js_document_getElementById (toJSString "body")
     js_set_innerHTML body $ toJSString $ renderHtml $ do
-        H.div $ do
-            "Name: "
-            H.span ! A.id "name_text" $ return ()
-        H.div $ do
-            "("
-            H.span ! A.id "self_ref_value" $ return ()
-            ")"
-        H.form ! A.id "name_set_form" ! A.action "javascript:void(0);" $ do
-            H.input ! A.id "name_set_input" ! A.type_ "text"
-            H.button ! A.type_ "submit" $ "set name"
-        H.hr
-        H.div $ do
+        H.div ! A.id "sidebar" $ do
+            H.div ! A.id "self" $ do
+                H.h2 $ do
+                    "Yourself"
+                H.div $ do
+                    "Name: "
+                    H.span ! A.id "name_text" $ return ()
+                H.div $ do
+                    "("
+                    H.span ! A.id "self_ref_value" $ return ()
+                    ")"
+                H.form ! A.id "name_set_form" ! A.action "javascript:void(0);" $ do
+                    H.input ! A.id "name_set_input" ! A.type_ "text"
+                    H.button ! A.type_ "submit" $ "set name"
+
+            H.div ! A.id "conversations" $ do
+                H.h2 $ do
+                    "Conversations"
+                H.div ! A.id "conversation_list" $ return ()
+
+            H.div ! A.id "invite" $ do
+                H.h2 $ do
+                    "Invite contact"
+                H.form ! A.id "invite_generate" ! A.action "javascript:void(0);" $ do
+                    "Name: "
+                    H.input ! A.id "invite_name"
+                    H.button ! A.type_ "submit" $ "create invite"
+                H.div ! A.id "invite_generated" $ do
+                    H.span ! A.id "invite_generated_url" $ return ()
+                    H.button ! A.id "invite_clipboard" $ "copy to clipboard"
+
+            H.div ! A.id "peers" $ do
+                H.h2 $ do
+                    "Peers"
+                H.ul ! A.id "peer_list" $ return ()
+                H.form ! A.id "peer_add_form" ! A.action "javascript:void(0);" $ do
+                    H.input ! A.id "peer_add_input" ! A.type_ "text"
+                    H.input ! A.type_ "submit" ! A.value "search"
+
+        H.div ! A.id "conversation" $ do
             H.h2 ! A.id "msg_header" $ do
                 return ()
             H.div ! A.id "msg_list" $ do
                 H.ul $ return ()
-        H.form ! A.id "msg_form" ! A.action "javascript:void(0);" $ do
-            H.input ! A.id "msg_text" ! A.type_ "text"
-            H.button ! A.type_ "submit" $ "send"
-        H.hr
-        H.div $ do
-            H.h2 $ do
-                "Conversations"
-            H.div ! A.id "conversation_list" $ return ()
-        H.hr
-        H.div $ do
-            H.h2 $ do
-                "Invite contact"
-            H.form ! A.id "invite_generate" ! A.action "javascript:void(0);" $ do
-                "Name: "
-                H.input ! A.id "invite_name"
-                H.button ! A.type_ "submit" $ "create invite"
-            H.div ! A.id "invite_generated" $ do
-                H.span ! A.id "invite_generated_url" $ return ()
-                H.button ! A.id "invite_clipboard" $ "copy to clipboard"
-        H.hr
-        H.div $ do
-            H.h2 $ do
-                "Peers"
-            H.ul ! A.id "peer_list" $ return ()
-            H.form ! A.id "peer_add_form" ! A.action "javascript:void(0);" $ do
-                H.input ! A.id "peer_add_input" ! A.type_ "text"
-                H.input ! A.type_ "submit" ! A.value "search"
+            H.form ! A.id "msg_form" ! A.action "javascript:void(0);" $ do
+                H.input ! A.id "msg_text" ! A.type_ "text"
+                H.button ! A.type_ "submit" $ "send"
 
 
     gs@GlobalState {..} <- initGlobalState
