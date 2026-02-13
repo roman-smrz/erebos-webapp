@@ -318,12 +318,16 @@ watchConversations gs@GlobalState {..} = do
             convList <- JS.getElementById "conversation_list"
             ul <- js_document_createElement (toJSString "ul")
             forM_ conversations $ \( _, conv ) -> do
+                li <- js_document_createElement (toJSString "li")
                 a <- js_document_createElement (toJSString "a")
                 js_setAttribute a (toJSString "href") (toJSString "javascript:void(0)")
                 JS.addEventListener a "click" $ \_ -> do
+                    js_removeClassFromAllChildren ul (toJSString "selected")
+                    js_classList_add li (toJSString "selected")
+                    body <- JS.getElementById "body"
+                    js_classList_add body (toJSString "conversation-selected")
                     selectConversation gs conv
 
-                li <- js_document_createElement (toJSString "li")
                 js_set_textContent a $ toJSString $ T.unpack $ conversationName conv
                 js_appendChild li a
                 js_appendChild ul li
@@ -441,6 +445,12 @@ foreign import javascript unsafe "$1.remove()"
 
 foreign import javascript unsafe "$1.setAttribute($2, $3)"
     js_setAttribute :: JSVal -> JSString -> JSString -> IO ()
+
+foreign import javascript unsafe "$1.classList.add($2)"
+    js_classList_add :: JSVal -> JSString -> IO ()
+
+foreign import javascript unsafe "$1.querySelectorAll('*').forEach(child => child.classList.remove($2))"
+    js_removeClassFromAllChildren :: JSVal -> JSString -> IO ()
 
 foreign import javascript unsafe "$1.value"
     js_get_value :: JSVal -> IO JSString
