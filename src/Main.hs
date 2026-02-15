@@ -167,9 +167,14 @@ setup = do
             SelectedConversation conv
               | maybe False (msgPeer cur `sameIdentity`) (conversationPeer conv)
               -> do
+                mbSelf <- join . fmap (lookupSharedValue @(Maybe ComposedIdentity) . lsShared . headObject) <$> reloadHead globalHead
                 forM_ (reverse $ dmThreadToListSince prev cur) $ \msg -> do
                     li <- js_document_createElement (toJSString "li")
                     js_set_textContent li $ toJSString $ formatDirectMessage tzone msg
+                    case mbSelf of
+                        Just self -> js_classList_add li $
+                            if msgFrom msg `sameIdentity` self then toJSString "sent" else toJSString "received"
+                        Nothing -> return ()
                     ul <- js_get_firstChild messagesList
                     js_appendChild ul li
 
@@ -343,9 +348,14 @@ selectConversation GlobalState {..} conv = do
 
     tzone <- getCurrentTimeZone
     ul <- js_document_createElement (toJSString "ul")
+    mbSelf <- join . fmap (lookupSharedValue @(Maybe ComposedIdentity) . lsShared . headObject) <$> reloadHead globalHead
     forM_ (reverse $ conversationHistory conv) $ \msg -> do
         li <- js_document_createElement (toJSString "li")
         js_set_textContent li $ toJSString $ formatMessage tzone msg
+        case mbSelf of
+            Just self -> js_classList_add li $
+                if messageFrom msg `sameIdentity` self then toJSString "sent" else toJSString "received"
+            Nothing -> return ()
         js_appendChild ul li
 
     js_set_textContent header $ toJSString $ T.unpack $ conversationName conv
