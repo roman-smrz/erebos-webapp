@@ -161,22 +161,13 @@ setup = do
             Left err -> JS.consoleLog $ "Failed to set name: " <> showErebosError err
 
     messagesList <- JS.getElementById "msg_list"
-    tzone <- getCurrentTimeZone
     void $ watchDirectMessageThreads globalHead $ \prev cur -> do
         withMVar currentConversationVar $ \case
             SelectedConversation conv
               | maybe False (msgPeer cur `sameIdentity`) (conversationPeer conv)
               -> do
-                mbSelf <- join . fmap (lookupSharedValue @(Maybe ComposedIdentity) . lsShared . headObject) <$> reloadHead globalHead
-                forM_ (reverse $ dmThreadToListSince prev cur) $ \msg -> do
-                    li <- js_document_createElement (toJSString "li")
-                    js_set_textContent li $ toJSString $ formatDirectMessage tzone msg
-                    case mbSelf of
-                        Just self -> js_classList_add li $
-                            if msgFrom msg `sameIdentity` self then toJSString "sent" else toJSString "received"
-                        Nothing -> return ()
-                    ul <- js_get_firstChild messagesList
-                    js_appendChild ul li
+                ul <- js_get_firstChild messagesList
+                appendMessages gs ul $ map Left $ reverse $ dmThreadToListSince prev cur
 
             _ -> return ()
 
@@ -340,23 +331,27 @@ watchConversations gs@GlobalState {..} = do
 
             return conversations
 
+appendMessages :: GlobalState -> JSVal -> [ Either DirectMessage Message ] -> IO ()
+appendMessages GlobalState {..} ul msgs = do
+    tzone <- getCurrentTimeZone
+    mbSelf <- join . fmap (lookupSharedValue @(Maybe ComposedIdentity) . lsShared . headObject) <$> reloadHead globalHead
+    forM_ msgs $ \msg -> do
+        li <- js_document_createElement (toJSString "li")
+        js_set_textContent li $ toJSString $ either (formatDirectMessage tzone) (formatMessage tzone) msg
+        case mbSelf of
+            Just self -> js_classList_add li $
+                if either msgFrom messageFrom msg `sameIdentity` self then toJSString "sent" else toJSString "received"
+            Nothing -> return ()
+        js_appendChild ul li
+
 selectConversation :: GlobalState -> Conversation -> IO ()
-selectConversation GlobalState {..} conv = do
+selectConversation gs@GlobalState {..} conv = do
     void $ swapMVar currentConversationVar (SelectedConversation conv)
     header <- JS.getElementById "msg_header"
     messagesList <- JS.getElementById "msg_list"
 
-    tzone <- getCurrentTimeZone
     ul <- js_document_createElement (toJSString "ul")
-    mbSelf <- join . fmap (lookupSharedValue @(Maybe ComposedIdentity) . lsShared . headObject) <$> reloadHead globalHead
-    forM_ (reverse $ conversationHistory conv) $ \msg -> do
-        li <- js_document_createElement (toJSString "li")
-        js_set_textContent li $ toJSString $ formatMessage tzone msg
-        case mbSelf of
-            Just self -> js_classList_add li $
-                if messageFrom msg `sameIdentity` self then toJSString "sent" else toJSString "received"
-            Nothing -> return ()
-        js_appendChild ul li
+    appendMessages gs ul $ map Right $ reverse $ conversationHistory conv
 
     js_set_textContent header $ toJSString $ T.unpack $ conversationName conv
     js_replaceChildren messagesList ul
