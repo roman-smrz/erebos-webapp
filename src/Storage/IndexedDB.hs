@@ -188,11 +188,11 @@ foreign import javascript unsafe
 
 
 foreign import javascript unsafe
-    "const tr = $1.transaction($2, \"readwrite\"); tr.onerror = (event) => { console.log(\"put transaction error\"); }; const key = new Uint8Array(globalThis.wasi_memory.buffer, $3, $4); const value = new Uint8Array(globalThis.wasi_memory.buffer, $5, $6); tr.objectStore($2).put(value, key); tr.commit();"
+    "const tr = $1.transaction($2, \"readwrite\"); tr.onerror = (event) => { console.log(\"put transaction error\"); }; const key = new Uint8Array(globalThis.wasi_memory.buffer).slice($3, $3 + $4); const value = new Uint8Array(globalThis.wasi_memory.buffer).slice($5, $5 + $6); tr.objectStore($2).put(value, key); tr.commit();"
     js_db_put :: JSVal -> JSString -> Ptr Word8 -> Int -> Ptr Word8 -> Int -> IO ()
 
 foreign import javascript unsafe
-    "const tr = $1.transaction($2, \"readonly\"); tr.onerror = (event) => { console.log(\"get transaction error\"); }; const req = tr.objectStore($2).get(new Uint8Array(globalThis.wasi_memory.buffer, $3, $4)); req.onsuccess = $5; tr.commit();"
+    "const tr = $1.transaction($2, \"readonly\"); tr.onerror = (event) => { console.log(\"get transaction error\"); }; const req = tr.objectStore($2).get(new Uint8Array(globalThis.wasi_memory.buffer).slice($3, $3 + $4)); req.onsuccess = $5; tr.commit();"
     js_db_get :: JSVal -> JSString -> Ptr Word8 -> Int -> JSVal -> IO ()
 
 foreign import javascript unsafe
