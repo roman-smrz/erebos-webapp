@@ -12,6 +12,7 @@ import Data.Proxy
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding
+import Data.Time.Format
 import Data.Time.LocalTime
 
 import GHC.Wasm.Prim
@@ -336,8 +337,18 @@ appendMessages GlobalState {..} ul msgs = do
     tzone <- getCurrentTimeZone
     mbSelf <- join . fmap (lookupSharedValue @(Maybe ComposedIdentity) . lsShared . headObject) <$> reloadHead globalHead
     forM_ msgs $ \msg -> do
+        let parts =
+                [ ( "msg-time", formatTime defaultTimeLocale "%H:%M" $ utcToLocalTime tzone $ zonedTimeToUTC $ either msgTime messageTime msg )
+                , ( "msg-from", maybe "<unnamed>" T.unpack $ idName $ either msgFrom messageFrom msg )
+                , ( "msg-text", maybe "" T.unpack $ either (Just . msgText) messageText msg )
+                ]
         li <- js_document_createElement (toJSString "li")
-        js_set_textContent li $ toJSString $ either (formatDirectMessage tzone) (formatMessage tzone) msg
+        forM_ parts $ \( cls, content ) -> do
+            element <- js_document_createElement (toJSString "span")
+            js_classList_add element $ toJSString cls
+            js_set_textContent element $ toJSString content
+            js_appendChild li element
+
         case mbSelf of
             Just self -> js_classList_add li $
                 if either msgFrom messageFrom msg `sameIdentity` self then toJSString "sent" else toJSString "received"
