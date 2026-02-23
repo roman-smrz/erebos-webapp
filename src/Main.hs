@@ -199,13 +199,14 @@ setup = do
     JS.addEventListener inviteGenerateForm "submit" $ \_ -> do
         name <- T.pack . fromJSString <$> js_get_value inviteGenerateInput
         js_set_value inviteGenerateInput $ toJSString ""
-        href <- fromJSString <$> js_get_location_href
+        origin <- fromJSString <$> js_get_location_origin
+        pathname <- fromJSString <$> js_get_location_pathname
         res <- runExceptT $ flip runReaderT globalHead $ do
             (lookupSharedValue . lsShared . fromStored <$> getLocalHead) >>= \case
                 Just (self :: ComposedIdentity) -> do
                     invite <- createSingleContactInvite name
                     dgst : _ <- return $ refDigest . storedRef <$> idDataF self
-                    return $ href <> "#inv" <> (maybe "" (("=" <>) . showInviteToken) (inviteToken invite)) <> "&from=blake2%23" <> drop 7 (show dgst)
+                    return $ origin <> pathname <> "#inv" <> (maybe "" (("=" <>) . showInviteToken) (inviteToken invite)) <> "&from=blake2%23" <> drop 7 (show dgst)
                 Nothing -> do
                     throwOtherError "no shared identity"
         case res of
@@ -237,16 +238,33 @@ setup = do
                     Left err -> JS.consoleLog $ "Failed to send message: " <> showErebosError err
             WaitingForPeerConversation _ _ -> JS.consoleLog "waiting for peer to start conversation"
 
+    JS.addEventListener js_window "hashchange" $ \_ -> do
+        processUrlParams gs server
     processUrlParams gs server
 
 
 processUrlParams :: GlobalState -> Server -> IO ()
-processUrlParams GlobalState {..} server = do
+processUrlParams gs@GlobalState {..} server = do
     hash <- fromJSString <$> js_get_location_hash
     case hash of
         '#' : str -> do
             let params = parseQuery $ BC.pack str
             if
+              | Just dgst <- readRefDigest =<< id =<< lookup "conv" params
+              -> do
+                reloadHead globalHead >>= \case
+                    Just ls -> do
+                        runLocalHeadT (lookupConversationByRef dgst) globalStorage (headStoredObject ls) >>= \case
+                            ( Just conv, _ ) -> do
+                                readMVar currentConversationVar >>= \case
+                                    SelectedConversation selected
+                                        | selected `isSameConversation` conv -> do
+                                            return ()
+                                    _ -> do
+                                        selectConversation gs conv
+                            _ -> JS.consoleLog $ "Failed to load selected conversation"
+                    Nothing -> JS.consoleLog "Failed to reload local state head"
+
               | Just token <- parseInviteToken . decodeUtf8 =<< id =<< lookup "inv" params
               , Just from <- readRefDigest =<< id =<< lookup "from" params
               -> do
@@ -254,11 +272,10 @@ processUrlParams GlobalState {..} server = do
                 runExceptT (discoverySearch server from) >>= \case
                     Right () -> return ()
                     Left err -> JS.consoleLog $ "Failed to search for " <> show from <> ": " <> showErebosError err
+                js_history_pushState (toJSString " ")
 
               | otherwise -> do
                 JS.consoleLog $ "Unrecognized URL parameters: " <> show params
-
-            js_history_pushState (toJSString " ")
 
         _ -> return ()
 
@@ -292,45 +309,42 @@ interactiveIdentityUpdate name fidentity = do
 
 
 watchConversations :: GlobalState -> IO ()
-watchConversations gs@GlobalState {..} = do
+watchConversations GlobalState {..} = do
     void $ watchHead globalHead $ \ls -> do
         modifyMVar_ conversationsVar $ \_ -> do
-            conversations <- zip [1 ..] . fst <$>
+            conversations <- fst <$>
                 runLocalHeadT lookupConversations globalStorage (headStoredObject ls)
 
-            modifyMVar_ currentConversationVar $ \case
+            conversations' <- modifyMVar currentConversationVar $ \case
                 x@(SelectedConversation selected) -> do
-                    let updateCurrent [] = return x
-                        updateCurrent (( _, c ) : cs)
+                    let updateCurrent [] = return ( x, [] )
+                        updateCurrent (c : cs)
                             | c `isSameConversation` selected = do
                                 when (conversationName c /= conversationName selected) $ do
                                     header <- JS.getElementById "msg_header"
                                     js_set_textContent header $ toJSString $ T.unpack $ conversationName c
-                                return $ SelectedConversation c
+                                return ( SelectedConversation c, ( c, True ) : map (, False) cs )
                             | otherwise = do
-                                updateCurrent cs
+                                fmap (( c, False ) :) <$> updateCurrent cs
                     updateCurrent conversations
-                x -> return x
+                x -> return ( x, map (, False ) conversations )
 
             convList <- JS.getElementById "conversation_list"
             ul <- js_document_createElement (toJSString "ul")
-            forM_ conversations $ \( _, conv ) -> do
+            forM_ conversations' $ \( conv, selected ) -> do
                 li <- js_document_createElement (toJSString "li")
-                a <- js_document_createElement (toJSString "a")
-                js_setAttribute a (toJSString "href") (toJSString "javascript:void(0)")
-                JS.addEventListener a "click" $ \_ -> do
-                    js_removeClassFromAllChildren ul (toJSString "selected")
+                when selected $ do
                     js_classList_add li (toJSString "selected")
-                    body <- JS.getElementById "body"
-                    js_classList_add body (toJSString "conversation-selected")
-                    selectConversation gs conv
+                js_setAttribute li (toJSString "data-conv") $ toJSString $ show $ conversationReference conv
+                a <- js_document_createElement (toJSString "a")
+                js_setAttribute a (toJSString "href") $ toJSString $ "#conv=blake2%23" <> drop 7 (show $ conversationReference conv)
 
                 js_set_textContent a $ toJSString $ T.unpack $ conversationName conv
                 js_appendChild li a
                 js_appendChild ul li
             js_replaceChildren convList ul
 
-            return conversations
+            return $ zip [ 1 .. ] conversations
 
 appendMessages :: GlobalState -> JSVal -> [ Either DirectMessage Message ] -> IO ()
 appendMessages GlobalState {..} ul msgs = do
@@ -357,15 +371,33 @@ appendMessages GlobalState {..} ul msgs = do
 
 selectConversation :: GlobalState -> Conversation -> IO ()
 selectConversation gs@GlobalState {..} conv = do
-    void $ swapMVar currentConversationVar (SelectedConversation conv)
-    header <- JS.getElementById "msg_header"
-    messagesList <- JS.getElementById "msg_list"
+    modifyMVar_ currentConversationVar $ \cur -> do
+        if
+          | SelectedConversation conv' <- cur
+          , conv' `isSameConversation` conv -> do
+              return ()
 
-    ul <- js_document_createElement (toJSString "ul")
-    appendMessages gs ul $ map Right $ reverse $ conversationHistory conv
+          | otherwise -> do
+            header <- JS.getElementById "msg_header"
+            messagesList <- JS.getElementById "msg_list"
 
-    js_set_textContent header $ toJSString $ T.unpack $ conversationName conv
-    js_replaceChildren messagesList ul
+            ul <- js_document_createElement (toJSString "ul")
+            appendMessages gs ul $ map Right $ reverse $ conversationHistory conv
+
+            js_set_textContent header $ toJSString $ T.unpack $ conversationName conv
+            js_replaceChildren messagesList ul
+
+            JS.documentQuerySelector "#conversation_list ul" >>= \case
+                Just ulConv -> do
+                    js_removeClassFromAllChildren ulConv (toJSString "selected")
+                    maybe (return ()) (`js_classList_add` toJSString "selected") =<<
+                        JS.querySelector ("li[data-conv='" <> show (conversationReference conv) <> "']") ulConv
+                Nothing -> return ()
+
+            body <- JS.getElementById "body"
+            js_classList_add body (toJSString "conversation-selected")
+
+        return $ SelectedConversation conv
 
 
 watchPeers :: GlobalState -> Server -> JSVal -> IO ()
@@ -474,11 +506,17 @@ foreign import javascript unsafe "$1.value"
 foreign import javascript unsafe "$1.value = $2"
     js_set_value :: JSVal -> JSString -> IO ()
 
+foreign import javascript unsafe "window"
+    js_window :: JSVal
+
 foreign import javascript unsafe "window.location.hash"
     js_get_location_hash :: IO JSString
 
-foreign import javascript unsafe "window.location.href"
-    js_get_location_href :: IO JSString
+foreign import javascript unsafe "window.location.origin"
+    js_get_location_origin :: IO JSString
+
+foreign import javascript unsafe "window.location.pathname"
+    js_get_location_pathname :: IO JSString
 
 foreign import javascript unsafe "history.pushState(null, '', $1)"
     js_history_pushState :: JSString -> IO ()
