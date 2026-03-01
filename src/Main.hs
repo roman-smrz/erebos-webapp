@@ -52,14 +52,15 @@ data GlobalState = GlobalState
     { globalStorage :: Storage
     , globalHead :: Head LocalState
     , peerListVar :: MVar [ ( Peer, String, JSVal ) ]
-    , currentConversationVar :: MVar CurrentConversation
+    , currentContextVar :: MVar SelectedContext
     , conversationsVar :: MVar [ ( Int, Conversation ) ]
     }
 
-data CurrentConversation
-    = NoCurrentConversation
+data SelectedContext
+    = NoContext
     | SelectedConversation Conversation
     | WaitingForPeerConversation RefDigest InviteToken
+    | SelectedPeer (Either RefDigest Peer)
 
 initGlobalState :: IO GlobalState
 initGlobalState = do
@@ -88,7 +89,7 @@ initGlobalState = do
                     }
 
         peerListVar <- liftIO $ newMVar []
-        currentConversationVar <- liftIO $ newMVar NoCurrentConversation
+        currentContextVar <- liftIO $ newMVar NoContext
         conversationsVar <- liftIO $ newMVar []
         return GlobalState {..}
 
@@ -136,7 +137,7 @@ setup = do
                     H.input ! A.id "peer_add_input" ! A.type_ "text"
                     H.input ! A.type_ "submit" ! A.value "search"
 
-        H.div ! A.id "conversation" $ do
+        H.div ! A.id "conversation" ! A.class_ "selected-content" $ do
             H.h2 ! A.id "msg_header" $ do
                 return ()
             H.div ! A.id "msg_list" $ do
@@ -144,6 +145,24 @@ setup = do
             H.form ! A.id "msg_form" ! A.action "javascript:void(0);" $ do
                 H.input ! A.id "msg_text" ! A.type_ "text"
                 H.button ! A.type_ "submit" $ "send"
+
+        H.div ! A.id "peer_details" ! A.class_ "selected-content" $ do
+            H.h2 ! A.id "peer_name" $ do
+                "Peer: "
+                H.span ! A.id "peer_name_value" $ do
+                    return ()
+            H.div ! A.class_ "content" $ do
+                H.div ! A.id "peer_address" $ do
+                    H.span ! A.class_ "label" $ "Address:"
+                    " "
+                    H.span ! A.id "peer_address_value" $ return ()
+                H.div ! A.id "peer_ref" $ do
+                    H.span ! A.class_ "label" $ "Ref:"
+                    " "
+                    H.span ! A.id "peer_ref_value" $ return ()
+                H.div ! A.id "peer_dm" $ do
+                    H.a ! A.id "peer_dm_link" $ do
+                        "Direct message"
 
 
     gs@GlobalState {..} <- initGlobalState
@@ -163,7 +182,7 @@ setup = do
 
     messagesList <- JS.getElementById "msg_list"
     void $ watchDirectMessageThreads globalHead $ \prev cur -> do
-        withMVar currentConversationVar $ \case
+        withMVar currentContextVar $ \case
             SelectedConversation conv
               | maybe False (msgPeer cur `sameIdentity`) (conversationPeer conv)
               -> do
@@ -227,8 +246,8 @@ setup = do
             Nothing -> JS.consoleLog "invalid identity reference"
 
     JS.addEventListener sendForm "submit" $ \_ -> do
-        readMVar currentConversationVar >>= \case
-            NoCurrentConversation -> JS.consoleLog "no selected conversation"
+        readMVar currentContextVar >>= \case
+            NoContext -> JS.consoleLog "no selected conversation"
             SelectedConversation conv -> do
                 msg <- T.pack . fromJSString <$> js_get_value sendText
                 js_set_value sendText $ toJSString ""
@@ -237,6 +256,7 @@ setup = do
                     Right _ -> return ()
                     Left err -> JS.consoleLog $ "Failed to send message: " <> showErebosError err
             WaitingForPeerConversation _ _ -> JS.consoleLog "waiting for peer to start conversation"
+            SelectedPeer {} -> JS.consoleLog "selected peer, not conversation"
 
     JS.addEventListener js_window "hashchange" $ \_ -> do
         processUrlParams gs server
@@ -250,25 +270,52 @@ processUrlParams gs@GlobalState {..} server = do
         '#' : str -> do
             let params = parseQuery $ BC.pack str
             if
-              | Just dgst <- readRefDigest =<< id =<< lookup "conv" params
+              | Just dgst <- readRefDigest . ("blake2#" <>) =<< id =<< lookup "conv" params
               -> do
                 reloadHead globalHead >>= \case
                     Just ls -> do
                         runLocalHeadT (lookupConversationByRef dgst) globalStorage (headStoredObject ls) >>= \case
                             ( Just conv, _ ) -> do
-                                readMVar currentConversationVar >>= \case
+                                readMVar currentContextVar >>= \case
                                     SelectedConversation selected
                                         | selected `isSameConversation` conv -> do
                                             return ()
                                     _ -> do
                                         selectConversation gs conv
-                            _ -> JS.consoleLog $ "Failed to load selected conversation"
+                            ( Nothing, _ ) -> do
+                                let match p = do
+                                        getPeerIdentity p >>= \case
+                                            PeerIdentityFull pid -> return $ dgst `elem` (refDigest . storedRef <$> idDataF (finalOwner pid))
+                                            _ -> return False
+                                findPeer server match >>= \case
+                                    Just peer -> do
+                                        getPeerIdentity peer >>= \case
+                                            PeerIdentityFull pid -> do
+                                                selectConversation gs =<< runReaderT (directMessageConversation $ finalOwner pid) globalHead
+                                            _ -> return ()
+                                    Nothing -> refFromDigest globalStorage dgst >>= \case
+                                        Just ref
+                                            | Just pid <- validateIdentity (wrappedLoad ref)
+                                            , Nothing <- idOwner pid
+                                            -> do
+                                                selectConversation gs =<< runReaderT (directMessageConversation $ toComposedIdentity pid) globalHead
+
+                                            | otherwise -> do
+                                                JS.consoleLog $ "Failed to validate conversation peer"
+
+                                        Nothing -> do
+                                            JS.consoleLog $ "Failed to load conversation ref"
+
                     Nothing -> JS.consoleLog "Failed to reload local state head"
+
+              | Just dgst <- readRefDigest . ("blake2#" <>) =<< id =<< lookup "peer" params
+              -> do
+                selectPeer gs server dgst
 
               | Just token <- parseInviteToken . decodeUtf8 =<< id =<< lookup "inv" params
               , Just from <- readRefDigest =<< id =<< lookup "from" params
               -> do
-                void $ swapMVar currentConversationVar $ WaitingForPeerConversation from token
+                void $ swapMVar currentContextVar $ WaitingForPeerConversation from token
                 runExceptT (discoverySearch server from) >>= \case
                     Right () -> return ()
                     Left err -> JS.consoleLog $ "Failed to search for " <> show from <> ": " <> showErebosError err
@@ -315,7 +362,7 @@ watchConversations GlobalState {..} = do
             conversations <- fst <$>
                 runLocalHeadT lookupConversations globalStorage (headStoredObject ls)
 
-            conversations' <- modifyMVar currentConversationVar $ \case
+            conversations' <- modifyMVar currentContextVar $ \case
                 x@(SelectedConversation selected) -> do
                     let updateCurrent [] = return ( x, [] )
                         updateCurrent (c : cs)
@@ -337,7 +384,7 @@ watchConversations GlobalState {..} = do
                     js_classList_add li (toJSString "selected")
                 js_setAttribute li (toJSString "data-conv") $ toJSString $ show $ conversationReference conv
                 a <- js_document_createElement (toJSString "a")
-                js_setAttribute a (toJSString "href") $ toJSString $ "#conv=blake2%23" <> drop 7 (show $ conversationReference conv)
+                js_setAttribute a (toJSString "href") $ toJSString $ "#conv=" <> drop 7 (show $ conversationReference conv)
 
                 js_set_textContent a $ toJSString $ T.unpack $ conversationName conv
                 js_appendChild li a
@@ -371,7 +418,7 @@ appendMessages GlobalState {..} ul msgs = do
 
 selectConversation :: GlobalState -> Conversation -> IO ()
 selectConversation gs@GlobalState {..} conv = do
-    modifyMVar_ currentConversationVar $ \cur -> do
+    modifyMVar_ currentContextVar $ \cur -> do
         if
           | SelectedConversation conv' <- cur
           , conv' `isSameConversation` conv -> do
@@ -387,6 +434,10 @@ selectConversation gs@GlobalState {..} conv = do
             js_set_textContent header $ toJSString $ T.unpack $ conversationName conv
             js_replaceChildren messagesList ul
 
+            JS.documentQuerySelector "ul#peer_list" >>= \case
+                Just ulPeers -> do
+                    js_removeClassFromAllChildren ulPeers (toJSString "selected")
+                Nothing -> return ()
             JS.documentQuerySelector "#conversation_list ul" >>= \case
                 Just ulConv -> do
                     js_removeClassFromAllChildren ulConv (toJSString "selected")
@@ -395,9 +446,59 @@ selectConversation gs@GlobalState {..} conv = do
                 Nothing -> return ()
 
             body <- JS.getElementById "body"
+            js_classList_remove body (toJSString "peer-selected")
             js_classList_add body (toJSString "conversation-selected")
 
         return $ SelectedConversation conv
+
+selectPeer :: GlobalState -> Server -> RefDigest -> IO ()
+selectPeer GlobalState {..} server dgst = do
+    let match p = do
+            getPeerIdentity p >>= \case
+                PeerIdentityFull pid -> return $ dgst == (refDigest $ storedRef $ idData pid)
+                _ -> return False
+    modifyMVar_ currentContextVar $ \_ -> do
+        selected <- findPeer server match >>= \case
+            Just peer -> do
+                updatePeerDetails peer
+                return $ SelectedPeer $ Right peer
+            Nothing -> do
+                return $ SelectedPeer $ Left dgst
+
+        JS.documentQuerySelector "#conversation_list ul" >>= \case
+            Just ul -> do
+                js_removeClassFromAllChildren ul (toJSString "selected")
+            Nothing -> return ()
+        JS.documentQuerySelector "ul#peer_list" >>= \case
+            Just ul -> do
+                js_removeClassFromAllChildren ul (toJSString "selected")
+                maybe (return ()) (`js_classList_add` toJSString "selected") =<<
+                    JS.querySelector ("li[data-peer='" <> show dgst <> "']") ul
+            Nothing -> return ()
+
+        body <- JS.getElementById "body"
+        js_classList_remove body (toJSString "conversation-selected")
+        js_classList_add body (toJSString "peer-selected")
+        return selected
+
+updatePeerDetails :: Peer -> IO ()
+updatePeerDetails peer = do
+    nameElem <- JS.getElementById "peer_name_value"
+    refElem <- JS.getElementById "peer_ref_value"
+    addrElem <- JS.getElementById "peer_address_value"
+    dmLinkElem <- JS.getElementById "peer_dm_link"
+    paddr <- getPeerAddress peer
+    pid <- getPeerIdentity peer
+    js_set_textContent nameElem $ toJSString $ showPeer pid
+    case pid of
+        PeerIdentityFull pidf -> do
+            js_set_textContent refElem $ toJSString $ show $ refDigest $ storedRef $ idData pidf
+            js_setAttribute dmLinkElem (toJSString "href") $ toJSString $ "#conv=" <> drop 7 (show $ refDigest $ storedRef $ head $ idDataF $ finalOwner pidf)
+        PeerIdentityRef wref _ -> do
+            js_set_textContent refElem $ toJSString $ show $ wrDigest wref
+        PeerIdentityUnknown _ -> do
+            js_set_textContent refElem $ toJSString "unknown"
+    js_set_textContent addrElem $ toJSString $ show paddr
 
 
 watchPeers :: GlobalState -> Server -> JSVal -> IO ()
@@ -406,18 +507,26 @@ watchPeers gs@GlobalState {..} server htmlList = do
         peer <- getNextPeerChange server
         getPeerIdentity peer >>= \case
             pid@(PeerIdentityFull pidf) -> do
+                selected <- modifyMVar currentContextVar $ \case
+                    SelectedPeer (Right peer') | peer' == peer -> do
+                        return ( SelectedPeer $ Right peer, True )
+                    SelectedPeer (Left dgst) | dgst == refDigest (storedRef $ idData pidf) -> do
+                        return ( SelectedPeer $ Right peer, True )
+                    x -> return ( x, False )
+                when selected $ do
+                    updatePeerDetails peer
                 dropped <- isPeerDropped peer
-                shown <- showPeer pid <$> getPeerAddress peer
+                paddr <- getPeerAddress peer
+                let shown = showPeer pid ++ " [" ++ show paddr ++ "]"
                 let update [] = do
                         a <- js_document_createElement (toJSString "a")
                         js_setAttribute a (toJSString "href") (toJSString "javascript:void(0)")
-                        JS.addEventListener a "click" $ \_ -> do
-                            pidf' <- getPeerIdentity peer >>= \case
-                                PeerIdentityFull pidf' -> return pidf'
-                                _                      -> return pidf
-                            selectConversation gs =<< runReaderT (directMessageConversation $ finalOwner pidf') globalHead
+                        js_setAttribute a (toJSString "href") $ toJSString $ "#peer=" <> drop 7 (show $ refDigest $ storedRef $ idData pidf)
 
                         li <- js_document_createElement (toJSString "li")
+                        when selected $ do
+                            js_classList_add li (toJSString "selected")
+                        js_setAttribute li (toJSString "data-peer") $ toJSString $ show $ refDigest $ storedRef $ idData pidf
                         js_set_textContent a $ toJSString shown
                         js_appendChild li a
                         js_appendChild htmlList li
@@ -441,7 +550,7 @@ watchPeers gs@GlobalState {..} server htmlList = do
                             (( p, s, li ) :) <$> update ps
                 modifyMVar_ peerListVar update
 
-                readMVar currentConversationVar >>= \case
+                readMVar currentContextVar >>= \case
                     WaitingForPeerConversation dgst token
                       | dgst `elem` identityDigests pidf -> do
                           Just h <- reloadHead globalHead
@@ -452,13 +561,11 @@ watchPeers gs@GlobalState {..} server htmlList = do
 
             _ -> return ()
 
-showPeer :: PeerIdentity -> PeerAddress -> String
-showPeer pidentity paddr =
-    let name = case pidentity of
-                    PeerIdentityUnknown _  -> "<noid>"
-                    PeerIdentityRef wref _ -> "<" ++ BC.unpack (showRefDigest $ wrDigest wref) ++ ">"
-                    PeerIdentityFull pid   -> T.unpack $ displayIdentity pid
-     in name ++ " [" ++ show paddr ++ "]"
+showPeer :: PeerIdentity -> String
+showPeer = \case
+    PeerIdentityUnknown _  -> "<noid>"
+    PeerIdentityRef wref _ -> "<" ++ BC.unpack (showRefDigest $ wrDigest wref) ++ ">"
+    PeerIdentityFull pid   -> T.unpack $ displayIdentity pid
 
 identityDigests :: Foldable f => Identity f -> [ RefDigest ]
 identityDigests pid = map (refDigest . storedRef) $ idDataF =<< unfoldOwners pid
@@ -496,6 +603,9 @@ foreign import javascript unsafe "$1.setAttribute($2, $3)"
 
 foreign import javascript unsafe "$1.classList.add($2)"
     js_classList_add :: JSVal -> JSString -> IO ()
+
+foreign import javascript unsafe "$1.classList.remove($2)"
+    js_classList_remove :: JSVal -> JSString -> IO ()
 
 foreign import javascript unsafe "$1.querySelectorAll('*').forEach(child => child.classList.remove($2))"
     js_removeClassFromAllChildren :: JSVal -> JSString -> IO ()
