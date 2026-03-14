@@ -43,8 +43,8 @@ instance PeerAddressType Connection where
     sendBytesToAddress = sendMessage
     connectionToAddressClosed = closeConnection
 
-startClient :: String -> Int -> String -> (Connection -> IO ()) -> IO ()
-startClient addr port path fun = do
+startClient :: Server -> String -> Int -> String -> (Connection -> IO ()) -> IO ()
+startClient server addr port path fun = do
     connUnique <- newUnique
     let connAddress = "wss://" <> addr <> ":" <> show port <> "/" <> path
     connJS <- js_initWebSocket (toJSString connAddress)
@@ -61,6 +61,12 @@ startClient addr port path fun = do
         js_copyBytes ptr bytes
         bs <- unsafePackCStringFinalizer ptr len (free ptr)
         writeChan connInQueue bs
+
+    JS.addEventListener connJS "close" $ \_ -> do
+        dropPeerAddress server $ CustomPeerAddress conn
+
+    JS.addEventListener connJS "error" $ \_ -> do
+        dropPeerAddress server $ CustomPeerAddress conn
 
 
 sendMessage :: Connection -> ByteString -> IO ()

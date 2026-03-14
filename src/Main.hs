@@ -205,7 +205,7 @@ setup = do
     peerList <- JS.getElementById "peer_list"
     watchPeers gs server peerList
 
-    startClient "a.discovery.erebosprotocol.net" 443 "" $ \conn -> do
+    startClient server "a.discovery.erebosprotocol.net" 443 "" $ \conn -> do
         void $ forkIO $ forever $ do
             msg <- receiveMessage conn
             receivedFromCustomAddress server conn msg
