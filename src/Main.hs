@@ -96,6 +96,8 @@ initGlobalState = do
 foreign export javascript setup :: IO ()
 setup :: IO ()
 setup = do
+    experimentalAccepted <- js_storage_getItem (toJSString "experimental-accepted")
+
     body <- js_document_getElementById (toJSString "body")
     js_set_innerHTML body $ toJSString $ renderHtml $ do
         H.div ! A.id "sidebar" $ do
@@ -163,6 +165,23 @@ setup = do
                 H.div ! A.id "peer_dm" $ do
                     H.a ! A.id "peer_dm_link" $ do
                         "Direct message"
+
+        when (js_string_is_null experimentalAccepted) $ do
+            H.div ! A.id "experimental_warning" $ do
+                H.div ! A.class_ "text" $ do
+                    H.b "Experimental software. "
+                    "Use at your own risk. "
+                    H.br
+                    "See "
+                    H.a ! A.href "//erebosprotocol.net/webapp" ! A.target "_blank" $ "homepage"
+                    " for details."
+                H.a ! A.class_ "close-button" ! A.href "javascript:void(0)" $ do
+                    H.preEscapedText $ T.concat
+                        [ "<svg viewBox=\"0 0 100 100\" xmlns=\"http://www.w3.org/2000/svg\">"
+                        , "<line x1=\"10\" y1=\"90\" x2=\"90\" y2=\"10\" stroke=\"currentColor\" stroke-width=\"12\" stroke-linecap=\"round\" />"
+                        , "<line x1=\"10\" y1=\"10\" x2=\"90\" y2=\"90\" stroke=\"currentColor\" stroke-width=\"12\" stroke-linecap=\"round\" />"
+                        , "</svg>"
+                        ]
 
 
     gs@GlobalState {..} <- initGlobalState
@@ -264,6 +283,16 @@ setup = do
                     Left err -> JS.consoleLog $ "Failed to send message: " <> showErebosError err
             WaitingForPeerConversation _ _ -> JS.consoleLog "waiting for peer to start conversation"
             SelectedPeer {} -> JS.consoleLog "selected peer, not conversation"
+
+    JS.getElementById "experimental_warning" >>= \case
+        Just experimentalWarning -> do
+            JS.querySelector ".close-button" experimentalWarning >>= \case
+                Just experimentalAccept -> do
+                    JS.addEventListener experimentalAccept "click" $ \_ -> do
+                        js_element_remove experimentalWarning
+                        js_storage_setItem (toJSString "experimental-accepted") (toJSString "")
+                Nothing -> return ()
+        Nothing -> return ()
 
     JS.addEventListener js_window "hashchange" $ \_ -> do
         processUrlParams gs server
@@ -647,3 +676,12 @@ foreign import javascript unsafe "history.pushState(null, '', $1)"
 
 foreign import javascript unsafe "navigator.clipboard.writeText($1)"
     js_navigator_clipboard_writeText :: JSString -> IO ()
+
+foreign import javascript unsafe "window.localStorage.setItem($1, $2)"
+    js_storage_setItem :: JSString -> JSString -> IO ()
+
+foreign import javascript unsafe "window.localStorage.getItem($1)"
+    js_storage_getItem :: JSString -> IO JSString
+
+foreign import javascript unsafe "$1 === null"
+    js_string_is_null :: JSString -> Bool
