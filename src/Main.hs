@@ -169,30 +169,34 @@ setup = do
     watchIdentityUpdates gs
     watchConversations gs
 
-    setNameInput <- JS.getElementById "name_set_input"
-    setNameForm <- JS.getElementById "name_set_form"
-    JS.addEventListener setNameForm "submit" $ \_ -> do
-        name <- T.pack . fromJSString <$> js_get_value setNameInput
-        js_set_value setNameInput $ toJSString ""
-        Just h <- reloadHead globalHead
-        res <- runExceptT $ flip runReaderT h $ updateSharedIdentity name
-        case res of
-            Right _ -> return ()
-            Left err -> JS.consoleLog $ "Failed to set name: " <> showErebosError err
+    JS.getElementById "name_set_input" >>= \case
+        Just setNameInput -> JS.getElementById "name_set_form" >>= \case
+            Just setNameForm -> JS.addEventListener setNameForm "submit" $ \_ -> do
+                name <- T.pack . fromJSString <$> js_get_value setNameInput
+                js_set_value setNameInput $ toJSString ""
+                Just h <- reloadHead globalHead
+                res <- runExceptT $ flip runReaderT h $ updateSharedIdentity name
+                case res of
+                    Right _ -> return ()
+                    Left err -> JS.consoleLog $ "Failed to set name: " <> showErebosError err
+            Nothing -> return ()
+        Nothing -> return ()
 
-    messagesList <- JS.getElementById "msg_list"
-    void $ watchDirectMessageThreads globalHead $ \prev cur -> do
-        withMVar currentContextVar $ \case
-            SelectedConversation conv
-              | maybe False (msgPeer cur `sameIdentity`) (conversationPeer conv)
-              -> do
-                ul <- js_get_firstChild messagesList
-                appendMessages gs ul $ map Left $ reverse $ dmThreadToListSince prev cur
+    JS.getElementById "msg_list" >>= \case
+        Just messagesList -> do
+            void $ watchDirectMessageThreads globalHead $ \prev cur -> do
+                withMVar currentContextVar $ \case
+                    SelectedConversation conv
+                      | maybe False (msgPeer cur `sameIdentity`) (conversationPeer conv)
+                      -> do
+                        ul <- js_get_firstChild messagesList
+                        appendMessages gs ul $ map Left $ reverse $ dmThreadToListSince prev cur
 
-            _ -> return ()
+                    _ -> return ()
+        Nothing -> return ()
 
-    sendText <- JS.getElementById "msg_text"
-    sendForm <- JS.getElementById "msg_form"
+    Just sendText <- JS.getElementById "msg_text"
+    Just sendForm <- JS.getElementById "msg_form"
 
     server <- startServer defaultServerOptions globalHead JS.consoleLog
         [ someService @ChatroomService Proxy
@@ -202,8 +206,8 @@ setup = do
         , someService @InviteService Proxy
         ]
 
-    peerList <- JS.getElementById "peer_list"
-    watchPeers gs server peerList
+    maybe (return ()) (watchPeers gs server) =<<
+        JS.getElementById "peer_list"
 
     startClient server "a.discovery.erebosprotocol.net" 443 "" $ \conn -> do
         void $ forkIO $ forever $ do
@@ -211,10 +215,10 @@ setup = do
             receivedFromCustomAddress server conn msg
         void $ serverPeerCustom server conn
 
-    inviteGenerateInput <- JS.getElementById "invite_name"
-    inviteGenerateForm <- JS.getElementById "invite_generate"
-    inviteGeneratedUrl <- JS.getElementById "invite_generated_url"
-    inviteClipboard <- JS.getElementById "invite_clipboard"
+    Just inviteGenerateInput <- JS.getElementById "invite_name"
+    Just inviteGenerateForm <- JS.getElementById "invite_generate"
+    Just inviteGeneratedUrl <- JS.getElementById "invite_generated_url"
+    Just inviteClipboard <- JS.getElementById "invite_clipboard"
     JS.addEventListener inviteGenerateForm "submit" $ \_ -> do
         name <- T.pack . fromJSString <$> js_get_value inviteGenerateInput
         js_set_value inviteGenerateInput $ toJSString ""
@@ -234,16 +238,19 @@ setup = do
     JS.addEventListener inviteClipboard "click" $ \_ -> do
         js_navigator_clipboard_writeText =<< js_get_textContent inviteGeneratedUrl
 
-    peerAddInput <- JS.getElementById "peer_add_input"
-    peerAddForm <- JS.getElementById "peer_add_form"
-    JS.addEventListener peerAddForm "submit" $ \_ -> do
-        value <- T.pack . fromJSString <$> js_get_value peerAddInput
-        js_set_value peerAddInput $ toJSString ""
-        case readRefDigest $ encodeUtf8 value of
-            Just dgst -> runExceptT (discoverySearch server dgst) >>= \case
-                Right _ -> return ()
-                Left err -> JS.consoleLog $ "Failed to search for " <> show dgst <> ": " <> showErebosError err
-            Nothing -> JS.consoleLog "invalid identity reference"
+    JS.getElementById "peer_add_input" >>= \case
+        Just peerAddInput -> JS.getElementById "peer_add_form" >>= \case
+            Just peerAddForm -> do
+                JS.addEventListener peerAddForm "submit" $ \_ -> do
+                    value <- T.pack . fromJSString <$> js_get_value peerAddInput
+                    js_set_value peerAddInput $ toJSString ""
+                    case readRefDigest $ encodeUtf8 value of
+                        Just dgst -> runExceptT (discoverySearch server dgst) >>= \case
+                            Right _ -> return ()
+                            Left err -> JS.consoleLog $ "Failed to search for " <> show dgst <> ": " <> showErebosError err
+                        Nothing -> JS.consoleLog "invalid identity reference"
+            Nothing -> return ()
+        Nothing -> return ()
 
     JS.addEventListener sendForm "submit" $ \_ -> do
         readMVar currentContextVar >>= \case
@@ -368,28 +375,31 @@ watchConversations GlobalState {..} = do
                         updateCurrent (c : cs)
                             | c `isSameConversation` selected = do
                                 when (conversationName c /= conversationName selected) $ do
-                                    header <- JS.getElementById "msg_header"
-                                    js_set_textContent header $ toJSString $ T.unpack $ conversationName c
+                                    JS.getElementById "msg_header" >>= \case
+                                        Just header -> js_set_textContent header $ toJSString $ T.unpack $ conversationName c
+                                        Nothing -> return ()
                                 return ( SelectedConversation c, ( c, True ) : map (, False) cs )
                             | otherwise = do
                                 fmap (( c, False ) :) <$> updateCurrent cs
                     updateCurrent conversations
                 x -> return ( x, map (, False ) conversations )
 
-            convList <- JS.getElementById "conversation_list"
-            ul <- js_document_createElement (toJSString "ul")
-            forM_ conversations' $ \( conv, selected ) -> do
-                li <- js_document_createElement (toJSString "li")
-                when selected $ do
-                    js_classList_add li (toJSString "selected")
-                js_setAttribute li (toJSString "data-conv") $ toJSString $ show $ conversationReference conv
-                a <- js_document_createElement (toJSString "a")
-                js_setAttribute a (toJSString "href") $ toJSString $ "#conv=" <> drop 7 (show $ conversationReference conv)
+            JS.getElementById "conversation_list" >>= \case
+                Just convList -> do
+                    ul <- js_document_createElement (toJSString "ul")
+                    forM_ conversations' $ \( conv, selected ) -> do
+                        li <- js_document_createElement (toJSString "li")
+                        when selected $ do
+                            js_classList_add li (toJSString "selected")
+                        js_setAttribute li (toJSString "data-conv") $ toJSString $ show $ conversationReference conv
+                        a <- js_document_createElement (toJSString "a")
+                        js_setAttribute a (toJSString "href") $ toJSString $ "#conv=" <> drop 7 (show $ conversationReference conv)
 
-                js_set_textContent a $ toJSString $ T.unpack $ conversationName conv
-                js_appendChild li a
-                js_appendChild ul li
-            js_replaceChildren convList ul
+                        js_set_textContent a $ toJSString $ T.unpack $ conversationName conv
+                        js_appendChild li a
+                        js_appendChild ul li
+                    js_replaceChildren convList ul
+                Nothing -> return ()
 
             return $ zip [ 1 .. ] conversations
 
@@ -425,14 +435,14 @@ selectConversation gs@GlobalState {..} conv = do
               return ()
 
           | otherwise -> do
-            header <- JS.getElementById "msg_header"
-            messagesList <- JS.getElementById "msg_list"
 
             ul <- js_document_createElement (toJSString "ul")
             appendMessages gs ul $ map Right $ reverse $ conversationHistory conv
 
-            js_set_textContent header $ toJSString $ T.unpack $ conversationName conv
-            js_replaceChildren messagesList ul
+            JS.getElementById "msg_header" >>= \case
+                Just header -> js_set_textContent header $ toJSString $ T.unpack $ conversationName conv
+                Nothing -> return ()
+            maybe (return ()) (flip js_replaceChildren ul) =<< JS.getElementById "msg_list"
 
             JS.documentQuerySelector "ul#peer_list" >>= \case
                 Just ulPeers -> do
@@ -445,9 +455,11 @@ selectConversation gs@GlobalState {..} conv = do
                         JS.querySelector ("li[data-conv='" <> show (conversationReference conv) <> "']") ulConv
                 Nothing -> return ()
 
-            body <- JS.getElementById "body"
-            js_classList_remove body (toJSString "peer-selected")
-            js_classList_add body (toJSString "conversation-selected")
+            JS.getElementById "body" >>= \case
+                Just body -> do
+                    js_classList_remove body (toJSString "peer-selected")
+                    js_classList_add body (toJSString "conversation-selected")
+                Nothing -> return ()
 
         return $ SelectedConversation conv
 
@@ -476,29 +488,31 @@ selectPeer GlobalState {..} server dgst = do
                     JS.querySelector ("li[data-peer='" <> show dgst <> "']") ul
             Nothing -> return ()
 
-        body <- JS.getElementById "body"
-        js_classList_remove body (toJSString "conversation-selected")
-        js_classList_add body (toJSString "peer-selected")
+        JS.getElementById "body" >>= \case
+            Just body -> do
+                js_classList_remove body (toJSString "conversation-selected")
+                js_classList_add body (toJSString "peer-selected")
+            Nothing -> return ()
         return selected
 
 updatePeerDetails :: Peer -> IO ()
 updatePeerDetails peer = do
-    nameElem <- JS.getElementById "peer_name_value"
-    refElem <- JS.getElementById "peer_ref_value"
-    addrElem <- JS.getElementById "peer_address_value"
-    dmLinkElem <- JS.getElementById "peer_dm_link"
     paddr <- getPeerAddress peer
     pid <- getPeerIdentity peer
-    js_set_textContent nameElem $ toJSString $ showPeer pid
+    maybe (return ()) (flip js_set_textContent $ toJSString $ showPeer pid) =<<
+        JS.getElementById "peer_name_value"
     case pid of
         PeerIdentityFull pidf -> do
-            js_set_textContent refElem $ toJSString $ show $ refDigest $ storedRef $ idData pidf
-            js_setAttribute dmLinkElem (toJSString "href") $ toJSString $ "#conv=" <> drop 7 (show $ refDigest $ storedRef $ head $ idDataF $ finalOwner pidf)
+            maybe (return ()) (flip js_set_textContent $ toJSString $ show $ refDigest $ storedRef $ idData pidf) =<< JS.getElementById "peer_ref_value"
+            maybe (return ()) (\dmLinkElem ->
+                js_setAttribute dmLinkElem (toJSString "href") $ toJSString $ "#conv=" <> drop 7 (show $ refDigest $ storedRef $ head $ idDataF $ finalOwner pidf)
+                ) =<< JS.getElementById "peer_dm_link"
         PeerIdentityRef wref _ -> do
-            js_set_textContent refElem $ toJSString $ show $ wrDigest wref
+            maybe (return ()) (flip js_set_textContent $ toJSString $ show $ wrDigest wref) =<< JS.getElementById "peer_ref_value"
         PeerIdentityUnknown _ -> do
-            js_set_textContent refElem $ toJSString "unknown"
-    js_set_textContent addrElem $ toJSString $ show paddr
+            maybe (return ()) (flip js_set_textContent $ toJSString "unknown") =<< JS.getElementById "peer_ref_value"
+    maybe (return ()) (flip js_set_textContent $ toJSString $ show paddr) =<<
+        JS.getElementById "peer_address_value"
 
 
 watchPeers :: GlobalState -> Server -> JSVal -> IO ()

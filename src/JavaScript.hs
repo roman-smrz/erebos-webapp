@@ -12,8 +12,8 @@ module JavaScript (
 
 import GHC.Wasm.Prim
 
-getElementById :: String -> IO JSVal
-getElementById = js_document_getElementById . toJSString
+getElementById :: String -> IO (Maybe JSVal)
+getElementById = fmap nullToNothing . js_document_getElementById . toJSString
 foreign import javascript unsafe "document.getElementById($1)"
     js_document_getElementById :: JSString -> IO JSVal
 
