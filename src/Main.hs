@@ -131,13 +131,15 @@ setup = do
                     H.span ! A.id "invite_generated_url" $ return ()
                     H.button ! A.id "invite_clipboard" $ "copy to clipboard"
 
-            H.div ! A.id "peers" $ do
+            H.div ! A.id "peers" !  A.class_ "collapsed" $ do
                 H.h2 $ do
-                    "Peers"
+                    H.span $ "Peers (" >> (H.span ! A.id "peer_count" $ "0") >> ")"
+                    H.preEscapedText $ T.concat
+                        [ "<svg viewBox=\"0 0 100 100\" xmlns=\"http://www.w3.org/2000/svg\" class=\"collapse-icon\">"
+                        , "<polygon points=\"0,25 100,25 50,75\" style=\"fill:currentColor\" />"
+                        , "</svg>"
+                        ]
                 H.ul ! A.id "peer_list" $ return ()
-                H.form ! A.id "peer_add_form" ! A.action "javascript:void(0);" $ do
-                    H.input ! A.id "peer_add_input" ! A.type_ "text"
-                    H.input ! A.type_ "submit" ! A.value "search"
 
         H.div ! A.id "conversation" ! A.class_ "selected-content" $ do
             H.h2 ! A.id "msg_header" $ do
@@ -257,17 +259,11 @@ setup = do
     JS.addEventListener inviteClipboard "click" $ \_ -> do
         js_navigator_clipboard_writeText =<< js_get_textContent inviteGeneratedUrl
 
-    JS.getElementById "peer_add_input" >>= \case
-        Just peerAddInput -> JS.getElementById "peer_add_form" >>= \case
-            Just peerAddForm -> do
-                JS.addEventListener peerAddForm "submit" $ \_ -> do
-                    value <- T.pack . fromJSString <$> js_get_value peerAddInput
-                    js_set_value peerAddInput $ toJSString ""
-                    case readRefDigest $ encodeUtf8 value of
-                        Just dgst -> runExceptT (discoverySearch server dgst) >>= \case
-                            Right _ -> return ()
-                            Left err -> JS.consoleLog $ "Failed to search for " <> show dgst <> ": " <> showErebosError err
-                        Nothing -> JS.consoleLog "invalid identity reference"
+    JS.getElementById "peers" >>= \case
+        Just peersElem -> JS.querySelector "h2" peersElem >>= \case
+            Just header -> do
+                JS.addEventListener header "click" $ \_ -> do
+                    js_classList_toggle peersElem (toJSString "collapsed")
             Nothing -> return ()
         Nothing -> return ()
 
@@ -591,7 +587,11 @@ watchPeers gs@GlobalState {..} server htmlList = do
                         | otherwise
                         = do
                             (( p, s, li ) :) <$> update ps
-                modifyMVar_ peerListVar update
+                count <- modifyMVar peerListVar $ \plist -> do
+                    plist' <- update plist
+                    return ( plist', length plist' )
+                maybe (return ()) (flip js_set_textContent $ toJSString $ show count) =<<
+                    JS.getElementById "peer_count"
 
                 readMVar currentContextVar >>= \case
                     WaitingForPeerConversation dgst token
@@ -649,6 +649,9 @@ foreign import javascript unsafe "$1.classList.add($2)"
 
 foreign import javascript unsafe "$1.classList.remove($2)"
     js_classList_remove :: JSVal -> JSString -> IO ()
+
+foreign import javascript unsafe "$1.classList.toggle($2)"
+    js_classList_toggle :: JSVal -> JSString -> IO ()
 
 foreign import javascript unsafe "$1.querySelectorAll('*').forEach(child => child.classList.remove($2))"
     js_removeClassFromAllChildren :: JSVal -> JSString -> IO ()
