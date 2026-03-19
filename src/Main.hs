@@ -482,8 +482,7 @@ selectConversation gs@GlobalState {..} conv = do
 
             JS.getElementById "body" >>= \case
                 Just body -> do
-                    js_classList_remove body (toJSString "peer-selected")
-                    js_classList_add body (toJSString "conversation-selected")
+                    js_setAttribute body (toJSString "data-selected") (toJSString "conversation")
                 Nothing -> return ()
 
         return $ SelectedConversation conv
@@ -515,8 +514,7 @@ selectPeer GlobalState {..} server dgst = do
 
         JS.getElementById "body" >>= \case
             Just body -> do
-                js_classList_remove body (toJSString "conversation-selected")
-                js_classList_add body (toJSString "peer-selected")
+                js_setAttribute body (toJSString "data-selected") (toJSString "peer")
             Nothing -> return ()
         return selected
 
