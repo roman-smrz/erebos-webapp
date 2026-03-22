@@ -61,6 +61,7 @@ data SelectedContext
     | SelectedConversation Conversation
     | WaitingForPeerConversation RefDigest InviteToken
     | SelectedPeer (Either RefDigest Peer)
+    | SelectedSelf
 
 initGlobalState :: IO GlobalState
 initGlobalState = do
@@ -104,16 +105,11 @@ setup = do
             H.div ! A.id "self" $ do
                 H.h2 $ do
                     "Yourself"
-                H.div $ do
-                    "Name: "
-                    H.span ! A.id "name_text" $ return ()
-                H.div $ do
-                    "("
-                    H.span ! A.id "self_ref_value" $ return ()
-                    ")"
-                H.form ! A.id "name_set_form" ! A.action "javascript:void(0);" $ do
-                    H.input ! A.id "name_set_input" ! A.type_ "text"
-                    H.button ! A.type_ "submit" $ "set name"
+                H.ul $ do
+                    H.li $ do
+                        H.a ! A.href "#account" $ do
+                            H.div $ do
+                                H.span ! A.id "name_text" $ return ()
 
             H.div ! A.id "conversations" $ do
                 H.h2 $ do
@@ -167,6 +163,30 @@ setup = do
                 H.div ! A.id "peer_dm" $ do
                     H.a ! A.id "peer_dm_link" $ do
                         "Direct message"
+
+        H.div ! A.id "account_details" ! A.class_ "selected-content" $ do
+            H.h2 $ do
+                "Your account"
+            H.div ! A.class_ "content" $ do
+                H.div ! A.class_ "notice" $ do
+                    "All data are stored locally in browser storage.\
+                     \ Deleting the site data will remove all the account information,\
+                     \ including contacts, message history or cryptographic keys."
+
+                H.div $ do
+                    H.span ! A.class_ "label" $ "Name:"
+                    " "
+                    H.span ! A.id "name_text_detail" $ return ()
+
+                H.div ! A.id "self_ref" $ do
+                    H.span ! A.class_ "label" $ "Ref:"
+                    " "
+                    H.span ! A.id "self_ref_value" $ return ()
+
+                H.h3 $ "Change name"
+                H.form ! A.id "name_set_form" ! A.action "javascript:void(0);" $ do
+                    H.input ! A.id "name_set_input" ! A.type_ "text"
+                    H.button ! A.type_ "submit" $ "set name"
 
         when (js_string_is_null experimentalAccepted) $ do
             H.div ! A.id "experimental_warning" $ do
@@ -269,7 +289,6 @@ setup = do
 
     JS.addEventListener sendForm "submit" $ \_ -> do
         readMVar currentContextVar >>= \case
-            NoContext -> JS.consoleLog "no selected conversation"
             SelectedConversation conv -> do
                 msg <- T.pack . fromJSString <$> js_get_value sendText
                 js_set_value sendText $ toJSString ""
@@ -278,7 +297,7 @@ setup = do
                     Right _ -> return ()
                     Left err -> JS.consoleLog $ "Failed to send message: " <> showErebosError err
             WaitingForPeerConversation _ _ -> JS.consoleLog "waiting for peer to start conversation"
-            SelectedPeer {} -> JS.consoleLog "selected peer, not conversation"
+            _ -> JS.consoleLog "no selected conversation"
 
     JS.getElementById "experimental_warning" >>= \case
         Just experimentalWarning -> do
@@ -353,6 +372,10 @@ processUrlParams gs@GlobalState {..} server = do
                     Left err -> JS.consoleLog $ "Failed to search for " <> show from <> ": " <> showErebosError err
                 js_history_pushState (toJSString " ")
 
+              | Just Nothing <- lookup "account" params
+              -> do
+                selectSelf gs server
+
               | otherwise -> do
                 JS.consoleLog $ "Unrecognized URL parameters: " <> show params
 
@@ -362,10 +385,12 @@ processUrlParams gs@GlobalState {..} server = do
 watchIdentityUpdates :: GlobalState -> IO ()
 watchIdentityUpdates GlobalState {..} = do
     nameElem <- js_document_getElementById (toJSString "name_text")
+    nameElemDetail <- js_document_getElementById (toJSString "name_text_detail")
     selfRefElem <- js_document_getElementById (toJSString "self_ref_value")
     void $ watchHeadWith globalHead headLocalIdentity $ \lid -> do
         let fowner = finalOwner lid
         js_set_textContent nameElem $ toJSString $ maybe "(Anonymous)" T.unpack $ idName fowner
+        js_set_textContent nameElemDetail $ toJSString $ maybe "(Anonymous)" T.unpack $ idName fowner
         js_set_textContent selfRefElem $ toJSString $ maybe "" (show . refDigest . storedRef) $ listToMaybe $ idDataF fowner
 
 updateSharedIdentity :: (MonadHead LocalState m, MonadError e m, FromErebosError e) => Text -> m ()
@@ -469,16 +494,10 @@ selectConversation gs@GlobalState {..} conv = do
                 Nothing -> return ()
             maybe (return ()) (flip js_replaceChildren ul) =<< JS.getElementById "msg_list"
 
-            JS.documentQuerySelector "ul#peer_list" >>= \case
-                Just ulPeers -> do
-                    js_removeClassFromAllChildren ulPeers (toJSString "selected")
-                Nothing -> return ()
-            JS.documentQuerySelector "#conversation_list ul" >>= \case
-                Just ulConv -> do
-                    js_removeClassFromAllChildren ulConv (toJSString "selected")
-                    maybe (return ()) (`js_classList_add` toJSString "selected") =<<
-                        JS.querySelector ("li[data-conv='" <> show (conversationReference conv) <> "']") ulConv
-                Nothing -> return ()
+            mapM_ (flip js_classList_remove (toJSString "selected")) =<<
+                JS.documentQuerySelector "#sidebar ul li.selected"
+            mapM_ (flip js_classList_add (toJSString "selected")) =<<
+                JS.documentQuerySelector ("#conversation_list ul li[data-conv='" <> show (conversationReference conv) <> "']")
 
             JS.getElementById "body" >>= \case
                 Just body -> do
@@ -501,16 +520,10 @@ selectPeer GlobalState {..} server dgst = do
             Nothing -> do
                 return $ SelectedPeer $ Left dgst
 
-        JS.documentQuerySelector "#conversation_list ul" >>= \case
-            Just ul -> do
-                js_removeClassFromAllChildren ul (toJSString "selected")
-            Nothing -> return ()
-        JS.documentQuerySelector "ul#peer_list" >>= \case
-            Just ul -> do
-                js_removeClassFromAllChildren ul (toJSString "selected")
-                maybe (return ()) (`js_classList_add` toJSString "selected") =<<
-                    JS.querySelector ("li[data-peer='" <> show dgst <> "']") ul
-            Nothing -> return ()
+        mapM_ (flip js_classList_remove (toJSString "selected")) =<<
+            JS.documentQuerySelector "#sidebar ul li.selected"
+        mapM_ (`js_classList_add` toJSString "selected") =<<
+            JS.documentQuerySelector ("ul#peer_list li[data-peer='" <> show dgst <> "']")
 
         JS.getElementById "body" >>= \case
             Just body -> do
@@ -612,6 +625,18 @@ identityDigests :: Foldable f => Identity f -> [ RefDigest ]
 identityDigests pid = map (refDigest . storedRef) $ idDataF =<< unfoldOwners pid
 
 
+selectSelf :: GlobalState -> Server -> IO ()
+selectSelf GlobalState {..} _ = do
+    modifyMVar_ currentContextVar $ \_ -> do
+        mapM_ (\body -> js_setAttribute body (toJSString "data-selected") (toJSString "self")) =<<
+            JS.getElementById "body"
+        mapM_ (flip js_classList_remove (toJSString "selected")) =<<
+            JS.documentQuerySelector "#sidebar ul li.selected"
+        mapM_ (flip js_classList_add (toJSString "selected")) =<<
+            JS.documentQuerySelector ("#self ul li")
+        return SelectedSelf
+
+
 foreign import javascript unsafe "document.getElementById($1)"
     js_document_getElementById :: JSString -> IO JSVal
 
@@ -650,9 +675,6 @@ foreign import javascript unsafe "$1.classList.remove($2)"
 
 foreign import javascript unsafe "$1.classList.toggle($2)"
     js_classList_toggle :: JSVal -> JSString -> IO ()
-
-foreign import javascript unsafe "$1.querySelectorAll('*').forEach(child => child.classList.remove($2))"
-    js_removeClassFromAllChildren :: JSVal -> JSString -> IO ()
 
 foreign import javascript unsafe "$1.value"
     js_get_value :: JSVal -> IO JSString
