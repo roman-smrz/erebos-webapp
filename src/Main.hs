@@ -379,7 +379,13 @@ processUrlParams gs@GlobalState {..} server = do
               | otherwise -> do
                 JS.consoleLog $ "Unrecognized URL parameters: " <> show params
 
-        _ -> return ()
+        _ -> do
+            modifyMVar_ currentContextVar $ \_ -> do
+                mapM_ (flip js_classList_remove (toJSString "selected")) =<<
+                    JS.documentQuerySelector "#sidebar ul li.selected"
+                mapM_ (\body -> js_removeAttribute body (toJSString "data-selected")) =<<
+                    JS.getElementById "body"
+                return NoContext
 
 
 watchIdentityUpdates :: GlobalState -> IO ()
@@ -666,6 +672,9 @@ foreign import javascript unsafe "$1.remove()"
 
 foreign import javascript unsafe "$1.setAttribute($2, $3)"
     js_setAttribute :: JSVal -> JSString -> JSString -> IO ()
+
+foreign import javascript unsafe "$1.removeAttribute($2)"
+    js_removeAttribute :: JSVal -> JSString -> IO ()
 
 foreign import javascript unsafe "$1.classList.add($2)"
     js_classList_add :: JSVal -> JSString -> IO ()
