@@ -138,8 +138,9 @@ setup = do
                 H.ul ! A.id "peer_list" $ return ()
 
         H.div ! A.id "conversation" ! A.class_ "selected-content" $ do
-            H.h2 ! A.id "msg_header" $ do
-                return ()
+            H.h2 $ do
+                H.span ! A.id "msg_header" $ return ()
+                H.a ! A.href "#" ! A.class_ "back-button" $ "back"
             H.div ! A.id "msg_list" $ do
                 H.ul $ return ()
             H.form ! A.id "msg_form" ! A.action "javascript:void(0);" $ do
@@ -151,6 +152,7 @@ setup = do
                 "Peer: "
                 H.span ! A.id "peer_name_value" $ do
                     return ()
+                H.a ! A.href "#" ! A.class_ "back-button" $ "back"
             H.div ! A.class_ "content" $ do
                 H.div ! A.id "peer_address" $ do
                     H.span ! A.class_ "label" $ "Address:"
@@ -167,6 +169,7 @@ setup = do
         H.div ! A.id "account_details" ! A.class_ "selected-content" $ do
             H.h2 $ do
                 "Your account"
+                H.a ! A.href "#" ! A.class_ "back-button" $ "back"
             H.div ! A.class_ "content" $ do
                 H.div ! A.class_ "notice" $ do
                     "All data are stored locally in browser storage.\
