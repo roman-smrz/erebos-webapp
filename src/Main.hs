@@ -115,17 +115,10 @@ setup = do
                 H.h2 $ do
                     "Conversations"
                 H.div ! A.id "conversation_list" $ return ()
-
-            H.div ! A.id "invite" $ do
-                H.h2 $ do
-                    "Invite contact"
-                H.form ! A.id "invite_generate" ! A.action "javascript:void(0);" $ do
-                    "Name: "
-                    H.input ! A.id "invite_name"
-                    H.button ! A.type_ "submit" $ "create invite"
-                H.div ! A.id "invite_generated" $ do
-                    H.span ! A.id "invite_generated_url" $ return ()
-                    H.button ! A.id "invite_clipboard" $ "copy to clipboard"
+                H.ul $ do
+                    H.li ! A.id "create_invite_item" $ do
+                        H.a ! A.href "#create-invite" $ do
+                            "Invite contact"
 
             H.div ! A.id "peers" !  A.class_ "collapsed" $ do
                 H.h2 $ do
@@ -146,6 +139,28 @@ setup = do
             H.form ! A.id "msg_form" ! A.action "javascript:void(0);" $ do
                 H.input ! A.id "msg_text" ! A.type_ "text"
                 H.button ! A.type_ "submit" $ "send"
+
+        H.div ! A.id "create_invite_details" ! A.class_ "selected-content" $ do
+            H.h2 $ do
+                "Invite contact"
+                H.a ! A.href "#" ! A.class_ "back-button" $ "back"
+            H.div ! A.class_ "content" $ do
+                H.form ! A.id "invite_generate" ! A.action "javascript:void(0);" $ do
+                    "Contact name: "
+                    H.input ! A.id "invite_name" ! A.placeholder "(optional)"
+                    H.button ! A.type_ "submit" $ "create invite"
+                H.div ! A.id "invite_generated" $ do
+                    H.h3 "Created invite"
+                    "Contact name: "
+                    H.span ! A.id "invite_generated_name" $ return ()
+                    H.div $ do
+                        "Invite URL:"
+                        H.div ! A.id "invite_generated_url" $ return ()
+                    H.button ! A.id "invite_clipboard" $ "copy to clipboard"
+                    H.div ! A.class_ "notice" $ do
+                        "To accept the invite, the intended recipient needs to receive the URL above by secure means and either open it in a web browser (to use this WebApp), or accept it using the "
+                        H.code "/invite-accept"
+                        " command in the CLI client."
 
         H.div ! A.id "peer_details" ! A.class_ "selected-content" $ do
             H.h2 ! A.id "peer_name" $ do
@@ -261,6 +276,7 @@ setup = do
 
     Just inviteGenerateInput <- JS.getElementById "invite_name"
     Just inviteGenerateForm <- JS.getElementById "invite_generate"
+    Just inviteGeneratedName <- JS.getElementById "invite_generated_name"
     Just inviteGeneratedUrl <- JS.getElementById "invite_generated_url"
     Just inviteClipboard <- JS.getElementById "invite_clipboard"
     JS.addEventListener inviteGenerateForm "submit" $ \_ -> do
@@ -277,8 +293,13 @@ setup = do
                 Nothing -> do
                     throwOtherError "no shared identity"
         case res of
-            Right inviteText -> js_set_textContent inviteGeneratedUrl $ toJSString inviteText
-            Left err -> JS.consoleLog $ "Failed to send message: " <> showErebosError err
+            Right inviteText -> do
+                mapM_ (flip js_classList_add $ toJSString "generated") =<< JS.getElementById "invite_generated"
+                js_set_textContent inviteGeneratedName $ toJSString $ T.unpack name
+                js_set_textContent inviteGeneratedUrl $ toJSString inviteText
+            Left err -> do
+                JS.consoleLog $ "Failed to send message: " <> showErebosError err
+                mapM_ (flip js_classList_remove $ toJSString "generated") =<< JS.getElementById "invite_generated"
     JS.addEventListener inviteClipboard "click" $ \_ -> do
         js_navigator_clipboard_writeText =<< js_get_textContent inviteGeneratedUrl
 
@@ -378,6 +399,10 @@ processUrlParams gs@GlobalState {..} server = do
               | Just Nothing <- lookup "account" params
               -> do
                 selectSelf gs server
+
+              | Just Nothing <- lookup "create-invite" params
+              -> do
+                selectCreateInvite gs server
 
               | otherwise -> do
                 JS.consoleLog $ "Unrecognized URL parameters: " <> show params
@@ -643,6 +668,18 @@ selectSelf GlobalState {..} _ = do
             JS.documentQuerySelector "#sidebar ul li.selected"
         mapM_ (flip js_classList_add (toJSString "selected")) =<<
             JS.documentQuerySelector ("#self ul li")
+        return SelectedSelf
+
+
+selectCreateInvite :: GlobalState -> Server -> IO ()
+selectCreateInvite GlobalState {..} _ = do
+    modifyMVar_ currentContextVar $ \_ -> do
+        mapM_ (\body -> js_setAttribute body (toJSString "data-selected") (toJSString "create-invite")) =<<
+            JS.getElementById "body"
+        mapM_ (flip js_classList_remove (toJSString "selected")) =<<
+            JS.documentQuerySelector "#sidebar ul li.selected"
+        mapM_ (flip js_classList_add (toJSString "selected")) =<<
+            JS.documentQuerySelector ("#create_invite_item")
         return SelectedSelf
 
 
