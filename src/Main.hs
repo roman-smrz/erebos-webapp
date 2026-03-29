@@ -312,6 +312,7 @@ setup = do
         Nothing -> return ()
 
     JS.addEventListener sendForm "submit" $ \_ -> do
+        js_focus sendText
         readMVar currentContextVar >>= \case
             SelectedConversation conv -> do
                 msg <- T.pack . fromJSString <$> js_get_value sendText
@@ -538,6 +539,8 @@ selectConversation gs@GlobalState {..} conv = do
                     js_setAttribute body (toJSString "data-selected") (toJSString "conversation")
                 Nothing -> return ()
 
+            mapM_ js_focus =<< JS.getElementById "msg_text"
+
         return $ SelectedConversation conv
 
 selectPeer :: GlobalState -> Server -> RefDigest -> IO ()
@@ -730,6 +733,9 @@ foreign import javascript unsafe "$1.value"
 
 foreign import javascript unsafe "$1.value = $2"
     js_set_value :: JSVal -> JSString -> IO ()
+
+foreign import javascript unsafe "$1.focus()"
+    js_focus :: JSVal -> IO ()
 
 foreign import javascript unsafe "window"
     js_window :: JSVal
