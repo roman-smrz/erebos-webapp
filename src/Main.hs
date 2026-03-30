@@ -248,8 +248,15 @@ setup = do
                     SelectedConversation conv
                       | maybe False (msgPeer cur `sameIdentity`) (conversationPeer conv)
                       -> do
+                        scrollTop <- js_get_scrollTop messagesList
+                        scrollHeight <- js_get_scrollHeight messagesList
+                        clientHeight <- js_get_clientHeight messagesList
+
                         ul <- js_get_firstChild messagesList
                         appendMessages gs ul $ map Left $ reverse $ dmThreadToListSince prev cur
+
+                        when (scrollTop + clientHeight >= scrollHeight) $ do
+                            js_set_scrollTop messagesList =<< js_get_scrollHeight messagesList
 
                     _ -> return ()
         Nothing -> return ()
@@ -539,6 +546,7 @@ selectConversation gs@GlobalState {..} conv = do
                     js_setAttribute body (toJSString "data-selected") (toJSString "conversation")
                 Nothing -> return ()
 
+            mapM_ (\mlist -> js_set_scrollTop mlist =<< js_get_scrollHeight mlist) =<< JS.getElementById "msg_list"
             mapM_ js_focus =<< JS.getElementById "msg_text"
 
         return $ SelectedConversation conv
@@ -736,6 +744,18 @@ foreign import javascript unsafe "$1.value = $2"
 
 foreign import javascript unsafe "$1.focus()"
     js_focus :: JSVal -> IO ()
+
+foreign import javascript unsafe "$1.scrollTop"
+    js_get_scrollTop :: JSVal -> IO Int
+
+foreign import javascript unsafe "$1.scrollTop = $2"
+    js_set_scrollTop :: JSVal -> Int -> IO ()
+
+foreign import javascript unsafe "$1.scrollHeight"
+    js_get_scrollHeight :: JSVal -> IO Int
+
+foreign import javascript unsafe "$1.clientHeight"
+    js_get_clientHeight :: JSVal -> IO Int
 
 foreign import javascript unsafe "window"
     js_window :: JSVal
