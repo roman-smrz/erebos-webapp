@@ -114,11 +114,12 @@ setup = do
             H.div ! A.id "conversations" $ do
                 H.h2 $ do
                     "Conversations"
-                H.div ! A.id "conversation_list" $ return ()
-                H.ul $ do
-                    H.li ! A.id "create_invite_item" $ do
-                        H.a ! A.href "#create-invite" $ do
-                            "Invite contact"
+                H.div ! A.id "conversations_inner" $ do
+                    H.div ! A.id "conversation_list" $ return ()
+                    H.ul $ do
+                        H.li ! A.id "create_invite_item" $ do
+                            H.a ! A.href "#create-invite" $ do
+                                "Invite contact"
 
             H.div ! A.id "peers" !  A.class_ "collapsed" $ do
                 H.h2 $ do
