@@ -207,6 +207,9 @@ setup = do
                     H.input ! A.id "name_set_input" ! A.type_ "text"
                     H.button ! A.type_ "submit" $ "set name"
 
+        H.div ! A.id "version" $ do
+            "v0.1.0"
+
         when (js_string_is_null experimentalAccepted) $ do
             H.div ! A.id "experimental_warning" $ do
                 H.div ! A.class_ "text" $ do
