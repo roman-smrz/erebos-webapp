@@ -1,5 +1,5 @@
 # Revision history for erebos-webapp
 
-## 0.1.0.0 -- YYYY-mm-dd
+## 0.1.0 -- 2026-03-31
 
-* First version. Released on an unsuspecting world.
+* First version, supporting direct messages with URL-based invites.

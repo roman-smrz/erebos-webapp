@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               erebos-webapp
-version:            0.1.0.0
+version:            0.1.0
 -- synopsis:
 -- description:
 homepage:           https://erebosprotocol.net
@@ -56,11 +56,12 @@ executable erebos-webapp
 
     -- other-extensions:
     build-depends:
+        erebos == 0.2.1,
+
         base ^>= { 4.21 },
         blaze-html ^>= { 0.9 },
         bytestring ^>= { 0.12 },
         containers ^>= { 0.7, 0.8 },
-        erebos ^>= { 0.2.1 },
         ghc-experimental ^>= { 9.1201, 9.1202 },
         http-types ^>= { 0.12.4 },
         mtl ^>= { 2.3 },
