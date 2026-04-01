@@ -1,0 +1,5 @@
+/gen/
+/dist-newstyle/
+/ghc_wasm_jsffi.js
+/.minici/
+/.test/

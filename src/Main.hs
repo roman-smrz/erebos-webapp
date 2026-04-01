@@ -43,6 +43,7 @@ import Text.Blaze.Html.Renderer.String
 import JavaScript qualified as JS
 import Storage.Cache
 import Storage.IndexedDB
+import Version
 import WebSocket (startClient, receiveMessage)
 
 main :: IO ()
@@ -208,7 +209,7 @@ setup = do
                     H.button ! A.type_ "submit" $ "set name"
 
         H.div ! A.id "version" $ do
-            "v0.1.0"
+            H.toHtml versionLine
 
         when (js_string_is_null experimentalAccepted) $ do
             H.div ! A.id "experimental_warning" $ do

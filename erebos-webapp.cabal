@@ -28,9 +28,12 @@ executable erebos-webapp
     main-is:          Main.hs
     other-modules:
         JavaScript
+        Paths_erebos_webapp
         Storage.Cache
         Storage.IndexedDB
         Storage.WatchList
+        Version
+        Version.Git
         WebSocket
 
     default-extensions:
@@ -69,5 +72,8 @@ executable erebos-webapp
         time ^>= { 1.14 },
         uuid-types ^>= { 1.0.4 },
 
-    hs-source-dirs:   src
+    hs-source-dirs:
+        gen
+        src
+
     default-language: GHC2021
