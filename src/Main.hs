@@ -258,7 +258,7 @@ setup = do
                         clientHeight <- js_get_clientHeight messagesList
 
                         ul <- js_get_firstChild messagesList
-                        appendMessages gs ul $ map Left $ reverse $ dmThreadToListSince prev cur
+                        appendMessages gs ul $ map (makeMessage False) $ reverse $ dmThreadToListSince prev cur
 
                         when (scrollTop + clientHeight >= scrollHeight) $ do
                             js_set_scrollTop messagesList =<< js_get_scrollHeight messagesList
@@ -500,15 +500,15 @@ watchConversations GlobalState {..} = do
 
             return $ zip [ 1 .. ] conversations
 
-appendMessages :: GlobalState -> JSVal -> [ Either DirectMessage Message ] -> IO ()
+appendMessages :: GlobalState -> JSVal -> [ Message ] -> IO ()
 appendMessages GlobalState {..} ul msgs = do
     tzone <- getCurrentTimeZone
     mbSelf <- join . fmap (lookupSharedValue @(Maybe ComposedIdentity) . lsShared . headObject) <$> reloadHead globalHead
     forM_ msgs $ \msg -> do
         let parts =
-                [ ( "msg-time", formatTime defaultTimeLocale "%H:%M" $ utcToLocalTime tzone $ zonedTimeToUTC $ either msgTime messageTime msg )
-                , ( "msg-from", maybe "<unnamed>" T.unpack $ idName $ either msgFrom messageFrom msg )
-                , ( "msg-text", maybe "" T.unpack $ either (Just . msgText) messageText msg )
+                [ ( "msg-time", formatTime defaultTimeLocale "%H:%M" $ utcToLocalTime tzone $ zonedTimeToUTC $ messageTime msg )
+                , ( "msg-from", maybe "<unnamed>" T.unpack $ idName $ messageFrom msg )
+                , ( "msg-text", maybe "" T.unpack $ messageText msg )
                 ]
         li <- js_document_createElement (toJSString "li")
         forM_ parts $ \( cls, content ) -> do
@@ -519,7 +519,7 @@ appendMessages GlobalState {..} ul msgs = do
 
         case mbSelf of
             Just self -> js_classList_add li $
-                if either msgFrom messageFrom msg `sameIdentity` self then toJSString "sent" else toJSString "received"
+                if messageFrom msg `sameIdentity` self then toJSString "sent" else toJSString "received"
             Nothing -> return ()
         js_appendChild ul li
 
@@ -534,7 +534,7 @@ selectConversation gs@GlobalState {..} conv = do
           | otherwise -> do
 
             ul <- js_document_createElement (toJSString "ul")
-            appendMessages gs ul $ map Right $ reverse $ conversationHistory conv
+            appendMessages gs ul $ reverse $ conversationHistory conv
 
             JS.getElementById "msg_header" >>= \case
                 Just header -> js_set_textContent header $ toJSString $ T.unpack $ conversationName conv
