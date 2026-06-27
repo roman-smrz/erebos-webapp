@@ -258,7 +258,8 @@ setup = do
                         clientHeight <- js_get_clientHeight messagesList
 
                         ul <- js_get_firstChild messagesList
-                        appendMessages gs ul $ map (makeMessage False) $ reverse $ dmThreadToListSince prev cur
+                        let ( remove, messages ) = dmThreadToListChange prev cur
+                        appendMessages gs ul remove $ map (uncurry $ flip makeMessage) $ reverse messages
 
                         when (scrollTop + clientHeight >= scrollHeight) $ do
                             js_set_scrollTop messagesList =<< js_get_scrollHeight messagesList
@@ -500,11 +501,11 @@ watchConversations GlobalState {..} = do
 
             return $ zip [ 1 .. ] conversations
 
-appendMessages :: GlobalState -> JSVal -> [ Message ] -> IO ()
-appendMessages GlobalState {..} ul msgs = do
+appendMessages :: GlobalState -> JSVal -> Int -> [ Message ] -> IO ()
+appendMessages GlobalState {..} ul remove msgs = do
     tzone <- getCurrentTimeZone
     mbSelf <- join . fmap (lookupSharedValue @(Maybe ComposedIdentity) . lsShared . headObject) <$> reloadHead globalHead
-    forM_ msgs $ \msg -> do
+    lis <- forM msgs $ \msg -> do
         let parts =
                 [ ( "msg-time", formatTime defaultTimeLocale "%H:%M" $ utcToLocalTime tzone $ zonedTimeToUTC $ messageTime msg )
                 , ( "msg-from", maybe "<unnamed>" T.unpack $ idName $ messageFrom msg )
@@ -521,6 +522,11 @@ appendMessages GlobalState {..} ul msgs = do
             Just self -> js_classList_add li $
                 if messageFrom msg `sameIdentity` self then toJSString "sent" else toJSString "received"
             Nothing -> return ()
+        return li
+
+    replicateM_ remove $ do
+        js_element_remove =<< js_element_lastElementChild ul
+    forM_ lis $ \li -> do
         js_appendChild ul li
 
 selectConversation :: GlobalState -> Conversation -> IO ()
@@ -534,7 +540,7 @@ selectConversation gs@GlobalState {..} conv = do
           | otherwise -> do
 
             ul <- js_document_createElement (toJSString "ul")
-            appendMessages gs ul $ reverse $ conversationHistory conv
+            appendMessages gs ul 0 $ reverse $ conversationHistory conv
 
             JS.getElementById "msg_header" >>= \case
                 Just header -> js_set_textContent header $ toJSString $ T.unpack $ conversationName conv
@@ -725,6 +731,9 @@ foreign import javascript unsafe "document.createElement($1)"
 
 foreign import javascript unsafe "$1.remove()"
     js_element_remove :: JSVal -> IO ()
+
+foreign import javascript unsafe "$1.lastElementChild"
+    js_element_lastElementChild :: JSVal -> IO JSVal
 
 foreign import javascript unsafe "$1.setAttribute($2, $3)"
     js_setAttribute :: JSVal -> JSString -> JSString -> IO ()
