@@ -52,7 +52,7 @@ main = error "unused"
 data GlobalState = GlobalState
     { globalStorage :: Storage
     , globalHead :: Head LocalState
-    , peerListVar :: MVar [ ( Peer, String, JSVal ) ]
+    , peerListVar :: MVar [ ( Peer, String, Element ) ]
     , currentContextVar :: MVar SelectedContext
     , conversationsVar :: MVar [ ( Int, Conversation ) ]
     }
@@ -258,7 +258,7 @@ setup = do
                         scrollHeight <- js_get_scrollHeight messagesList'
                         clientHeight <- js_get_clientHeight messagesList'
 
-                        ul <- js_get_firstChild messagesList'
+                        Just ul <- firstElementChild messagesList
                         let ( remove, messages ) = dmThreadToListChange prev cur
                         appendMessages gs ul remove $ map (uncurry $ flip makeMessage) $ reverse messages
 
@@ -343,7 +343,7 @@ setup = do
             JS.querySelector ".close-button" experimentalWarning >>= \case
                 Just experimentalAccept -> do
                     JS.addEventListener experimentalAccept "click" $ \_ -> do
-                        js_element_remove (toJSVal experimentalWarning)
+                        removeElement experimentalWarning
                         js_storage_setItem (toJSString "experimental-accepted") (toJSString "")
                 Nothing -> return ()
         Nothing -> return ()
@@ -502,7 +502,7 @@ watchConversations GlobalState {..} = do
 
             return $ zip [ 1 .. ] conversations
 
-appendMessages :: GlobalState -> JSVal -> Int -> [ Message ] -> IO ()
+appendMessages :: GlobalState -> Element -> Int -> [ Message ] -> IO ()
 appendMessages GlobalState {..} ul remove msgs = do
     tzone <- getCurrentTimeZone
     mbSelf <- join . fmap (lookupSharedValue @(Maybe ComposedIdentity) . lsShared . headObject) <$> reloadHead globalHead
@@ -528,9 +528,9 @@ appendMessages GlobalState {..} ul remove msgs = do
         return li
 
     replicateM_ remove $ do
-        js_element_remove =<< js_element_lastElementChild ul
+        maybe (consoleLog "appendMessages: no element to remove") removeElement =<< lastElementChild ul
     forM_ lis $ \li -> do
-        js_appendChild ul li
+        js_appendChild (toJSVal ul) li
 
 selectConversation :: GlobalState -> Conversation -> IO ()
 selectConversation gs@GlobalState {..} conv = do
@@ -542,13 +542,13 @@ selectConversation gs@GlobalState {..} conv = do
 
           | otherwise -> do
 
-            ul <- js_document_createElement (toJSString "ul")
+            ul <- createElement "ul"
             appendMessages gs ul 0 $ reverse $ conversationHistory conv
 
             JS.getElementById "msg_header" >>= \case
                 Just header -> js_set_textContent (toJSVal header) $ toJSString $ T.unpack $ conversationName conv
                 Nothing -> return ()
-            maybe (return ()) (flip js_replaceChildren ul . toJSVal) =<< JS.getElementById "msg_list"
+            maybe (return ()) (flip js_replaceChildren (toJSVal ul) . toJSVal) =<< JS.getElementById "msg_list"
 
             mapM_ (flip js_classList_remove (toJSString "selected") . toJSVal) =<<
                 JS.documentQuerySelector "#sidebar ul li.selected"
@@ -632,26 +632,26 @@ watchPeers gs@GlobalState {..} server htmlList = do
                         js_setAttribute a (toJSString "href") (toJSString "javascript:void(0)")
                         js_setAttribute a (toJSString "href") $ toJSString $ "#peer=" <> drop 7 (show $ refDigest $ storedRef $ idData pidf)
 
-                        li <- js_document_createElement (toJSString "li")
+                        li <- createElement "li"
+                        let li' = toJSVal li
                         when selected $ do
-                            js_classList_add li (toJSString "selected")
-                        js_setAttribute li (toJSString "data-peer") $ toJSString $ show $ refDigest $ storedRef $ idData pidf
+                            js_classList_add li' (toJSString "selected")
+                        js_setAttribute li' (toJSString "data-peer") $ toJSString $ show $ refDigest $ storedRef $ idData pidf
                         js_set_textContent a $ toJSString shown
-                        js_appendChild li a
-                        js_appendChild (toJSVal htmlList) li
+                        js_appendChild li' a
+                        js_appendChild (toJSVal htmlList) li'
                         return [ ( peer, shown, li ) ]
 
                     update (( p, s, li ) : ps)
                         | p == peer && dropped
                         = do
-                            js_element_remove li
+                            removeElement li
                             return ps
 
                         | p == peer
                         = do
                             when (shown /= s) $ do
-                                a <- js_get_firstChild li
-                                js_set_textContent a $ toJSString shown
+                                mapM_ (flip js_set_textContent (toJSString shown) . toJSVal) =<< firstElementChild li
                             return (( peer, shown, li ) : ps)
 
                         | otherwise
@@ -720,9 +720,6 @@ foreign import javascript unsafe "$1.textContent = $2"
 foreign import javascript unsafe "$1.textContent"
     js_get_textContent :: JSVal -> IO JSString
 
-foreign import javascript unsafe "$1.firstChild"
-    js_get_firstChild :: JSVal -> IO JSVal
-
 foreign import javascript unsafe "$1.appendChild($2)"
     js_appendChild :: JSVal -> JSVal -> IO ()
 
@@ -731,12 +728,6 @@ foreign import javascript unsafe "$1.replaceChildren($2)"
 
 foreign import javascript unsafe "document.createElement($1)"
     js_document_createElement :: JSString -> IO JSVal
-
-foreign import javascript unsafe "$1.remove()"
-    js_element_remove :: JSVal -> IO ()
-
-foreign import javascript unsafe "$1.lastElementChild"
-    js_element_lastElementChild :: JSVal -> IO JSVal
 
 foreign import javascript unsafe "$1.setAttribute($2, $3)"
     js_setAttribute :: JSVal -> JSString -> JSString -> IO ()
