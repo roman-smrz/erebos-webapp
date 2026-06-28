@@ -512,6 +512,8 @@ appendMessages GlobalState {..} ul remove msgs = do
                 , ( "msg-text", maybe "" T.unpack $ messageText msg )
                 ]
         li <- js_document_createElement (toJSString "li")
+        when (messageUnread msg) $ do
+            js_classList_add li (toJSString "unread")
         forM_ parts $ \( cls, content ) -> do
             element <- js_document_createElement (toJSString "span")
             js_classList_add element $ toJSString cls
