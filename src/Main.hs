@@ -40,7 +40,7 @@ import Text.Blaze.Html5 qualified as H
 import Text.Blaze.Html5.Attributes qualified as A
 import Text.Blaze.Html.Renderer.String
 
-import JavaScript qualified as JS
+import JavaScript as JS
 import Storage.Cache
 import Storage.IndexedDB
 import Version
@@ -236,8 +236,8 @@ setup = do
     JS.getElementById "name_set_input" >>= \case
         Just setNameInput -> JS.getElementById "name_set_form" >>= \case
             Just setNameForm -> JS.addEventListener setNameForm "submit" $ \_ -> do
-                name <- T.pack . fromJSString <$> js_get_value setNameInput
-                js_set_value setNameInput $ toJSString ""
+                name <- T.pack . fromJSString <$> js_get_value (toJSVal setNameInput)
+                js_set_value (toJSVal setNameInput) $ toJSString ""
                 Just h <- reloadHead globalHead
                 res <- runExceptT $ flip runReaderT h $ updateSharedIdentity name
                 case res of
@@ -248,21 +248,22 @@ setup = do
 
     JS.getElementById "msg_list" >>= \case
         Just messagesList -> do
+            let messagesList' = toJSVal messagesList
             void $ watchDirectMessageThreads globalHead $ \prev cur -> do
                 withMVar currentContextVar $ \case
                     SelectedConversation conv
                       | maybe False (msgPeer cur `sameIdentity`) (conversationPeer conv)
                       -> do
-                        scrollTop <- js_get_scrollTop messagesList
-                        scrollHeight <- js_get_scrollHeight messagesList
-                        clientHeight <- js_get_clientHeight messagesList
+                        scrollTop <- js_get_scrollTop messagesList'
+                        scrollHeight <- js_get_scrollHeight messagesList'
+                        clientHeight <- js_get_clientHeight messagesList'
 
-                        ul <- js_get_firstChild messagesList
+                        ul <- js_get_firstChild messagesList'
                         let ( remove, messages ) = dmThreadToListChange prev cur
                         appendMessages gs ul remove $ map (uncurry $ flip makeMessage) $ reverse messages
 
                         when (scrollTop + clientHeight >= scrollHeight) $ do
-                            js_set_scrollTop messagesList =<< js_get_scrollHeight messagesList
+                            js_set_scrollTop messagesList' =<< js_get_scrollHeight messagesList'
 
                     _ -> return ()
         Nothing -> return ()
@@ -293,8 +294,8 @@ setup = do
     Just inviteGeneratedUrl <- JS.getElementById "invite_generated_url"
     Just inviteClipboard <- JS.getElementById "invite_clipboard"
     JS.addEventListener inviteGenerateForm "submit" $ \_ -> do
-        name <- T.pack . fromJSString <$> js_get_value inviteGenerateInput
-        js_set_value inviteGenerateInput $ toJSString ""
+        name <- T.pack . fromJSString <$> js_get_value (toJSVal inviteGenerateInput)
+        js_set_value (toJSVal inviteGenerateInput) $ toJSString ""
         origin <- fromJSString <$> js_get_location_origin
         pathname <- fromJSString <$> js_get_location_pathname
         res <- runExceptT $ flip runReaderT globalHead $ do
@@ -307,29 +308,29 @@ setup = do
                     throwOtherError "no shared identity"
         case res of
             Right inviteText -> do
-                mapM_ (flip js_classList_add $ toJSString "generated") =<< JS.getElementById "invite_generated"
-                js_set_textContent inviteGeneratedName $ toJSString $ T.unpack name
-                js_set_textContent inviteGeneratedUrl $ toJSString inviteText
+                mapM_ (flip js_classList_add (toJSString "generated") . toJSVal) =<< JS.getElementById "invite_generated"
+                js_set_textContent (toJSVal inviteGeneratedName) $ toJSString $ T.unpack name
+                js_set_textContent (toJSVal inviteGeneratedUrl) $ toJSString inviteText
             Left err -> do
                 JS.consoleLog $ "Failed to send message: " <> showErebosError err
-                mapM_ (flip js_classList_remove $ toJSString "generated") =<< JS.getElementById "invite_generated"
+                mapM_ (flip js_classList_remove (toJSString "generated") . toJSVal) =<< JS.getElementById "invite_generated"
     JS.addEventListener inviteClipboard "click" $ \_ -> do
-        js_navigator_clipboard_writeText =<< js_get_textContent inviteGeneratedUrl
+        js_navigator_clipboard_writeText =<< js_get_textContent (toJSVal inviteGeneratedUrl)
 
     JS.getElementById "peers" >>= \case
         Just peersElem -> JS.querySelector "h2" peersElem >>= \case
             Just header -> do
                 JS.addEventListener header "click" $ \_ -> do
-                    js_classList_toggle peersElem (toJSString "collapsed")
+                    js_classList_toggle (toJSVal peersElem) (toJSString "collapsed")
             Nothing -> return ()
         Nothing -> return ()
 
     JS.addEventListener sendForm "submit" $ \_ -> do
-        js_focus sendText
+        js_focus (toJSVal sendText)
         readMVar currentContextVar >>= \case
             SelectedConversation conv -> do
-                msg <- T.pack . fromJSString <$> js_get_value sendText
-                js_set_value sendText $ toJSString ""
+                msg <- T.pack . fromJSString <$> js_get_value (toJSVal sendText)
+                js_set_value (toJSVal sendText) $ toJSString ""
                 res <- runExceptT $ flip runReaderT globalHead $ sendMessage conv msg
                 case res of
                     Right _ -> return ()
@@ -342,12 +343,12 @@ setup = do
             JS.querySelector ".close-button" experimentalWarning >>= \case
                 Just experimentalAccept -> do
                     JS.addEventListener experimentalAccept "click" $ \_ -> do
-                        js_element_remove experimentalWarning
+                        js_element_remove (toJSVal experimentalWarning)
                         js_storage_setItem (toJSString "experimental-accepted") (toJSString "")
                 Nothing -> return ()
         Nothing -> return ()
 
-    JS.addEventListener js_window "hashchange" $ \_ -> do
+    JS.addEventListener globalWindow "hashchange" $ \_ -> do
         processUrlParams gs server
     processUrlParams gs server
 
@@ -423,9 +424,9 @@ processUrlParams gs@GlobalState {..} server = do
 
         _ -> do
             modifyMVar_ currentContextVar $ \_ -> do
-                mapM_ (flip js_classList_remove (toJSString "selected")) =<<
+                mapM_ (flip js_classList_remove (toJSString "selected") . toJSVal) =<<
                     JS.documentQuerySelector "#sidebar ul li.selected"
-                mapM_ (\body -> js_removeAttribute body (toJSString "data-selected")) =<<
+                mapM_ (flip js_removeAttribute (toJSString "data-selected") . toJSVal) =<<
                     JS.getElementById "body"
                 return NoContext
 
@@ -474,7 +475,7 @@ watchConversations GlobalState {..} = do
                             | c `isSameConversation` selected = do
                                 when (conversationName c /= conversationName selected) $ do
                                     JS.getElementById "msg_header" >>= \case
-                                        Just header -> js_set_textContent header $ toJSString $ T.unpack $ conversationName c
+                                        Just header -> js_set_textContent (toJSVal header) $ toJSString $ T.unpack $ conversationName c
                                         Nothing -> return ()
                                 return ( SelectedConversation c, ( c, True ) : map (, False) cs )
                             | otherwise = do
@@ -496,7 +497,7 @@ watchConversations GlobalState {..} = do
                         js_set_textContent a $ toJSString $ T.unpack $ conversationName conv
                         js_appendChild li a
                         js_appendChild ul li
-                    js_replaceChildren convList ul
+                    js_replaceChildren (toJSVal convList) ul
                 Nothing -> return ()
 
             return $ zip [ 1 .. ] conversations
@@ -545,22 +546,22 @@ selectConversation gs@GlobalState {..} conv = do
             appendMessages gs ul 0 $ reverse $ conversationHistory conv
 
             JS.getElementById "msg_header" >>= \case
-                Just header -> js_set_textContent header $ toJSString $ T.unpack $ conversationName conv
+                Just header -> js_set_textContent (toJSVal header) $ toJSString $ T.unpack $ conversationName conv
                 Nothing -> return ()
-            maybe (return ()) (flip js_replaceChildren ul) =<< JS.getElementById "msg_list"
+            maybe (return ()) (flip js_replaceChildren ul . toJSVal) =<< JS.getElementById "msg_list"
 
-            mapM_ (flip js_classList_remove (toJSString "selected")) =<<
+            mapM_ (flip js_classList_remove (toJSString "selected") . toJSVal) =<<
                 JS.documentQuerySelector "#sidebar ul li.selected"
-            mapM_ (flip js_classList_add (toJSString "selected")) =<<
+            mapM_ (flip js_classList_add (toJSString "selected") . toJSVal) =<<
                 JS.documentQuerySelector ("#conversation_list ul li[data-conv='" <> show (conversationReference conv) <> "']")
 
             JS.getElementById "body" >>= \case
                 Just body -> do
-                    js_setAttribute body (toJSString "data-selected") (toJSString "conversation")
+                    js_setAttribute (toJSVal body) (toJSString "data-selected") (toJSString "conversation")
                 Nothing -> return ()
 
-            mapM_ (\mlist -> js_set_scrollTop mlist =<< js_get_scrollHeight mlist) =<< JS.getElementById "msg_list"
-            mapM_ js_focus =<< JS.getElementById "msg_text"
+            mapM_ (\mlist -> js_set_scrollTop (toJSVal mlist) =<< js_get_scrollHeight (toJSVal mlist)) =<< JS.getElementById "msg_list"
+            mapM_ (js_focus . toJSVal) =<< JS.getElementById "msg_text"
 
         return $ SelectedConversation conv
 
@@ -578,14 +579,14 @@ selectPeer GlobalState {..} server dgst = do
             Nothing -> do
                 return $ SelectedPeer $ Left dgst
 
-        mapM_ (flip js_classList_remove (toJSString "selected")) =<<
+        mapM_ (flip js_classList_remove (toJSString "selected") . toJSVal) =<<
             JS.documentQuerySelector "#sidebar ul li.selected"
-        mapM_ (`js_classList_add` toJSString "selected") =<<
+        mapM_ (flip js_classList_add (toJSString "selected") . toJSVal) =<<
             JS.documentQuerySelector ("ul#peer_list li[data-peer='" <> show dgst <> "']")
 
         JS.getElementById "body" >>= \case
             Just body -> do
-                js_setAttribute body (toJSString "data-selected") (toJSString "peer")
+                js_setAttribute (toJSVal body) (toJSString "data-selected") (toJSString "peer")
             Nothing -> return ()
         return selected
 
@@ -593,23 +594,23 @@ updatePeerDetails :: Peer -> IO ()
 updatePeerDetails peer = do
     paddr <- getPeerAddress peer
     pid <- getPeerIdentity peer
-    maybe (return ()) (flip js_set_textContent $ toJSString $ showPeer pid) =<<
+    maybe (return ()) (flip js_set_textContent (toJSString $ showPeer pid) . toJSVal) =<<
         JS.getElementById "peer_name_value"
     case pid of
         PeerIdentityFull pidf -> do
-            maybe (return ()) (flip js_set_textContent $ toJSString $ show $ refDigest $ storedRef $ idData pidf) =<< JS.getElementById "peer_ref_value"
+            maybe (return ()) (flip js_set_textContent (toJSString $ show $ refDigest $ storedRef $ idData pidf) . toJSVal) =<< JS.getElementById "peer_ref_value"
             maybe (return ()) (\dmLinkElem ->
-                js_setAttribute dmLinkElem (toJSString "href") $ toJSString $ "#conv=" <> drop 7 (show $ refDigest $ storedRef $ head $ idDataF $ finalOwner pidf)
+                js_setAttribute (toJSVal dmLinkElem) (toJSString "href") $ toJSString $ "#conv=" <> drop 7 (show $ refDigest $ storedRef $ head $ idDataF $ finalOwner pidf)
                 ) =<< JS.getElementById "peer_dm_link"
         PeerIdentityRef wref _ -> do
-            maybe (return ()) (flip js_set_textContent $ toJSString $ show $ wrDigest wref) =<< JS.getElementById "peer_ref_value"
+            maybe (return ()) (flip js_set_textContent (toJSString $ show $ wrDigest wref) . toJSVal) =<< JS.getElementById "peer_ref_value"
         PeerIdentityUnknown _ -> do
-            maybe (return ()) (flip js_set_textContent $ toJSString "unknown") =<< JS.getElementById "peer_ref_value"
-    maybe (return ()) (flip js_set_textContent $ toJSString $ show paddr) =<<
+            maybe (return ()) (flip js_set_textContent (toJSString "unknown") . toJSVal) =<< JS.getElementById "peer_ref_value"
+    maybe (return ()) (flip js_set_textContent (toJSString $ show paddr) . toJSVal) =<<
         JS.getElementById "peer_address_value"
 
 
-watchPeers :: GlobalState -> Server -> JSVal -> IO ()
+watchPeers :: GlobalState -> Server -> Element -> IO ()
 watchPeers gs@GlobalState {..} server htmlList = do
     void $ forkIO $ void $ forever $ do
         peer <- getNextPeerChange server
@@ -637,7 +638,7 @@ watchPeers gs@GlobalState {..} server htmlList = do
                         js_setAttribute li (toJSString "data-peer") $ toJSString $ show $ refDigest $ storedRef $ idData pidf
                         js_set_textContent a $ toJSString shown
                         js_appendChild li a
-                        js_appendChild htmlList li
+                        js_appendChild (toJSVal htmlList) li
                         return [ ( peer, shown, li ) ]
 
                     update (( p, s, li ) : ps)
@@ -659,7 +660,7 @@ watchPeers gs@GlobalState {..} server htmlList = do
                 count <- modifyMVar peerListVar $ \plist -> do
                     plist' <- update plist
                     return ( plist', length plist' )
-                maybe (return ()) (flip js_set_textContent $ toJSString $ show count) =<<
+                maybe (return ()) (flip js_set_textContent (toJSString $ show count) . toJSVal) =<<
                     JS.getElementById "peer_count"
 
                 readMVar currentContextVar >>= \case
@@ -686,11 +687,11 @@ identityDigests pid = map (refDigest . storedRef) $ idDataF =<< unfoldOwners pid
 selectSelf :: GlobalState -> Server -> IO ()
 selectSelf GlobalState {..} _ = do
     modifyMVar_ currentContextVar $ \_ -> do
-        mapM_ (\body -> js_setAttribute body (toJSString "data-selected") (toJSString "self")) =<<
+        mapM_ (\body -> js_setAttribute (toJSVal body) (toJSString "data-selected") (toJSString "self")) =<<
             JS.getElementById "body"
-        mapM_ (flip js_classList_remove (toJSString "selected")) =<<
+        mapM_ (flip js_classList_remove (toJSString "selected") . toJSVal) =<<
             JS.documentQuerySelector "#sidebar ul li.selected"
-        mapM_ (flip js_classList_add (toJSString "selected")) =<<
+        mapM_ (flip js_classList_add (toJSString "selected") . toJSVal) =<<
             JS.documentQuerySelector ("#self ul li")
         return SelectedSelf
 
@@ -698,11 +699,11 @@ selectSelf GlobalState {..} _ = do
 selectCreateInvite :: GlobalState -> Server -> IO ()
 selectCreateInvite GlobalState {..} _ = do
     modifyMVar_ currentContextVar $ \_ -> do
-        mapM_ (\body -> js_setAttribute body (toJSString "data-selected") (toJSString "create-invite")) =<<
+        mapM_ (\body -> js_setAttribute (toJSVal body) (toJSString "data-selected") (toJSString "create-invite")) =<<
             JS.getElementById "body"
-        mapM_ (flip js_classList_remove (toJSString "selected")) =<<
+        mapM_ (flip js_classList_remove (toJSString "selected"). toJSVal) =<<
             JS.documentQuerySelector "#sidebar ul li.selected"
-        mapM_ (flip js_classList_add (toJSString "selected")) =<<
+        mapM_ (flip js_classList_add (toJSString "selected"). toJSVal) =<<
             JS.documentQuerySelector ("#create_invite_item")
         return SelectedSelf
 
@@ -772,9 +773,6 @@ foreign import javascript unsafe "$1.scrollHeight"
 
 foreign import javascript unsafe "$1.clientHeight"
     js_get_clientHeight :: JSVal -> IO Int
-
-foreign import javascript unsafe "window"
-    js_window :: JSVal
 
 foreign import javascript unsafe "window.location.hash"
     js_get_location_hash :: IO JSString

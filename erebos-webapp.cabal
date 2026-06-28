@@ -28,6 +28,10 @@ executable erebos-webapp
     main-is:          Main.hs
     other-modules:
         JavaScript
+        JavaScript.Element
+        JavaScript.Event
+        JavaScript.Val
+        JavaScript.Window
         Paths_erebos_webapp
         Storage.Cache
         Storage.IndexedDB

@@ -20,13 +20,14 @@ import Foreign.Ptr
 
 import GHC.Wasm.Prim
 
-import JavaScript qualified as JS
+import JavaScript
+import JavaScript.Val
 
 
 data Connection = Connection
     { connUnique :: Unique
     , connAddress :: String
-    , connJS :: JSVal
+    , connJS :: WebSocket
     , connInQueue :: Chan ByteString
     }
 
@@ -47,32 +48,32 @@ startClient :: Server -> String -> Int -> String -> (Connection -> IO ()) -> IO 
 startClient server addr port path fun = do
     connUnique <- newUnique
     let connAddress = "wss://" <> addr <> ":" <> show port <> "/" <> path
-    connJS <- js_initWebSocket (toJSString connAddress)
+    connJS <- initWebSocket connAddress
     connInQueue <- newChan
     let conn = Connection {..}
 
-    JS.addEventListener connJS "open" $ \_ -> do
+    addEventListener connJS "open" $ \_ -> do
         fun conn
 
-    JS.addEventListener connJS "message" $ \ev -> do
-        bytes <- js_get_data ev
+    addEventListener connJS "message" $ \ev -> do
+        bytes <- js_get_data $ toJSVal ev
         len <- js_get_byteLength bytes
         ptr <- mallocBytes len
         js_copyBytes ptr bytes
         bs <- unsafePackCStringFinalizer ptr len (free ptr)
         writeChan connInQueue bs
 
-    JS.addEventListener connJS "close" $ \_ -> do
+    addEventListener connJS "close" $ \_ -> do
         dropPeerAddress server $ CustomPeerAddress conn
 
-    JS.addEventListener connJS "error" $ \_ -> do
+    addEventListener connJS "error" $ \_ -> do
         dropPeerAddress server $ CustomPeerAddress conn
 
 
 sendMessage :: Connection -> ByteString -> IO ()
 sendMessage Connection {..} bs = do
     unsafeUseAsCStringLen bs $ \( ptr, len ) -> do
-        js_send connJS (castPtr ptr) len >>= \case
+        js_send (toJSVal connJS) (castPtr ptr) len >>= \case
             0 -> return ()
             1 -> error "websocket is not open"
 
@@ -82,8 +83,17 @@ receiveMessage Connection {..} = do
 
 closeConnection :: Connection -> IO ()
 closeConnection Connection {..} = do
-    js_close connJS
+    js_close (toJSVal connJS)
 
+
+newtype WebSocket = WebSocket JSVal
+    deriving (FromJSVal, ToJSVal)
+
+instance IsEventTarget WebSocket where
+    toEventTarget = fromJSValUnchecked . toJSVal
+
+initWebSocket :: String -> IO WebSocket
+initWebSocket addr = WebSocket <$> js_initWebSocket (toJSString addr)
 
 foreign import javascript unsafe "const ws = new WebSocket($1); ws.binaryType = 'arraybuffer'; return ws"
     js_initWebSocket :: JSString -> IO JSVal
