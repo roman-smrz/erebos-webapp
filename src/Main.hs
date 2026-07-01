@@ -485,19 +485,24 @@ watchConversations GlobalState {..} = do
 
             JS.getElementById "conversation_list" >>= \case
                 Just convList -> do
-                    ul <- js_document_createElement (toJSString "ul")
+                    ul <- createElement "ul"
                     forM_ conversations' $ \( conv, selected ) -> do
-                        li <- js_document_createElement (toJSString "li")
+                        li <- createElement "li"
                         when selected $ do
-                            js_classList_add li (toJSString "selected")
-                        js_setAttribute li (toJSString "data-conv") $ toJSString $ show $ conversationReference conv
-                        a <- js_document_createElement (toJSString "a")
-                        js_setAttribute a (toJSString "href") $ toJSString $ "#conv=" <> drop 7 (show $ conversationReference conv)
+                            addClass "selected" li
 
-                        js_set_textContent a $ toJSString $ T.unpack $ conversationName conv
-                        js_appendChild li a
-                        js_appendChild ul li
-                    js_replaceChildren (toJSVal convList) ul
+                        case conversationHistory conv of
+                            msg : _ | messageUnread  msg -> addClass "unread-messages" li
+                            _ -> return ()
+
+                        setAttribute "data-conv" (show $ conversationReference conv) li
+                        a <- createElement "a"
+                        setAttribute "href" ("#conv=" <> drop 7 (show $ conversationReference conv)) a
+
+                        setTextContent (T.unpack $ conversationName conv) a
+                        appendChild a li
+                        appendChild li ul
+                    js_replaceChildren (toJSVal convList) (toJSVal ul)
                 Nothing -> return ()
 
             return $ zip [ 1 .. ] conversations

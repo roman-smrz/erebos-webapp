@@ -30,6 +30,7 @@ executable erebos-webapp
         JavaScript
         JavaScript.Element
         JavaScript.Event
+        JavaScript.Node
         JavaScript.Val
         JavaScript.Window
         Paths_erebos_webapp
