@@ -66,7 +66,6 @@ data SelectedContext
 
 initGlobalState :: IO GlobalState
 initGlobalState = do
-    --globalStorage <- memoryStorage
     globalStorage <- cacheStorage =<< indexedDBStorage "erebos"
     (either (fail . showErebosError) return =<<) $ runExceptT $ flip runReaderT globalStorage $ do
         globalHead <- loadHeads globalStorage >>= \case
