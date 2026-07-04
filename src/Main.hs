@@ -408,7 +408,6 @@ processUrlParams gs@GlobalState {..} server = do
                 runExceptT (discoverySearch server from) >>= \case
                     Right () -> return ()
                     Left err -> JS.consoleLog $ "Failed to search for " <> show from <> ": " <> showErebosError err
-                js_history_pushState (toJSString " ")
 
               | Just Nothing <- lookup "account" params
               -> do
@@ -673,6 +672,7 @@ watchPeers gs@GlobalState {..} server htmlList = do
                           Just h <- reloadHead globalHead
                           (either (fail . showErebosError) return =<<) $ runExceptT $ flip runReaderT h $ do
                               acceptInvite dgst token
+                          historyPushState ("#conv=" <> drop 7 (show dgst))
                           selectConversation gs =<< runReaderT (directMessageConversation $ finalOwner pidf) globalHead
                     _ -> return ()
 
@@ -777,9 +777,6 @@ foreign import javascript unsafe "window.location.origin"
 
 foreign import javascript unsafe "window.location.pathname"
     js_get_location_pathname :: IO JSString
-
-foreign import javascript unsafe "history.pushState(null, '', $1)"
-    js_history_pushState :: JSString -> IO ()
 
 foreign import javascript unsafe "navigator.clipboard.writeText($1)"
     js_navigator_clipboard_writeText :: JSString -> IO ()

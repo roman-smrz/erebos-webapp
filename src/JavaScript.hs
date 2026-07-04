@@ -6,6 +6,8 @@ module JavaScript (
     toJSVal,
     consoleLog,
     consoleLogVal,
+
+    historyPushState,
 ) where
 
 import JavaScript.Element
@@ -21,3 +23,9 @@ foreign import javascript unsafe "console.log($1)"
 
 foreign import javascript unsafe "console.log($1)"
     consoleLogVal :: JSVal -> IO ()
+
+
+historyPushState :: String -> IO ()
+historyPushState = js_history_pushState . toJSString
+foreign import javascript unsafe "history.pushState(null, '', $1)"
+    js_history_pushState :: JSString -> IO ()
